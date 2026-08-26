@@ -1,4 +1,4 @@
-```python
+python
 import base64
 import json
 import os
@@ -229,4 +229,4 @@ def get_daily_recommendations(cookie: str) -> list[dict]:
     )
 
     return results
-```
+
