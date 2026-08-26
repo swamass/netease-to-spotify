@@ -229,4 +229,3 @@ def get_daily_recommendations(cookie: str) -> list[dict]:
     )
 
     return results
-
