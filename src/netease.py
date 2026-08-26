@@ -1,161 +1,108 @@
-import base64
-import binascii
-import json
 import os
-import re
+from http.cookies import SimpleCookie
 
 import requests
-from Crypto.Cipher import AES
 
 
-WEAPI_URL = "https://music.163.com/weapi/v2/discovery/recommend/songs"
-
-PRESET_KEY = b"0CoJUm6Qyw8W8jud"
-IV = b"0102030405060708"
-PUB_KEY = "010001"
-
-MODULUS = (
-    "00e0b509f6259df8642dbc35662901477df22677ec152b5ff68ace615bb7"
-    "b725152b3ab17a876aea8a5aa76d2e417629ec4ee341f56135fccf695280"
-    "104e0312ecbda92557c93870114af6c9d05c4f7f0c3685b7a46bee255932"
-    "575cce10b424d813cfe4875d3e82047b97ddef52741d546b8e289dc6935b"
-    "3ece0462db0a22b8e7"
+NETEASE_DAILY_URL = (
+    "https://music.163.com/api/v3/discovery/recommend/songs"
 )
 
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/139.0 Safari/537.36"
+        "Chrome/131.0.0.0 Safari/537.36"
     ),
     "Referer": "https://music.163.com/",
-    "Origin": "https://music.163.com",
 }
-
-
-def _pad(data: bytes) -> bytes:
-    """PKCS#7 padding."""
-    padding = 16 - len(data) % 16
-    return data + bytes([padding]) * padding
-
-
-def _aes_encrypt(data: bytes, key: bytes) -> str:
-    """AES-128-CBC + Base64."""
-    cipher = AES.new(key, AES.MODE_CBC, IV)
-    encrypted = cipher.encrypt(_pad(data))
-    return base64.b64encode(encrypted).decode("utf-8")
-
-
-def _create_secret_key() -> bytes:
-    """
-    Generate the 16-byte ASCII secret key used by NetEase WeAPI.
-    """
-    return binascii.hexlify(os.urandom(16))[:16]
-
-
-def _rsa_encrypt(secret_key: bytes) -> str:
-    """
-    RSA encrypt the reversed secret key.
-    """
-    text = secret_key[::-1]
-
-    number = int.from_bytes(text, byteorder="big")
-
-    encrypted = pow(
-        number,
-        int(PUB_KEY, 16),
-        int(MODULUS, 16),
-    )
-
-    return format(encrypted, "x").zfill(256)
-
-
-def _weapi_encrypt(payload: dict) -> dict:
-    """
-    Generate NetEase WebAPI params and encSecKey.
-    """
-    text = json.dumps(
-        payload,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
-
-    secret_key = _create_secret_key()
-
-    # First AES layer
-    first = _aes_encrypt(text, PRESET_KEY)
-
-    # Second AES layer
-    params = _aes_encrypt(first.encode("utf-8"), secret_key)
-
-    # RSA
-    enc_sec_key = _rsa_encrypt(secret_key)
-
-    return {
-        "params": params,
-        "encSecKey": enc_sec_key,
-    }
 
 
 def _get_csrf_token(cookie: str) -> str:
     """
-    Extract __csrf / csrf_token from the supplied NetEase cookie.
+    从网易云 Cookie 中获取 CSRF Token。
+
+    网易云常见的 Cookie 名称有：
+    - __csrf
+    - csrf_token
+
+    如果 Cookie 中没有，则尝试读取 GitHub Actions
+    中单独设置的 NETEASE_CSRF_TOKEN。
     """
-    match = re.search(r"(?:^|;\s*)__csrf=([^;]+)", cookie)
 
-    if match:
-        return match.group(1)
+    # 1. 优先从环境变量读取
+    csrf_token = os.getenv("NETEASE_CSRF_TOKEN", "").strip()
 
-    match = re.search(r"(?:^|;\s*)csrf_token=([^;]+)", cookie)
+    if csrf_token:
+        return csrf_token
 
-    if match:
-        return match.group(1)
+    # 2. 从 Cookie 中读取 __csrf / csrf_token
+    parsed = SimpleCookie()
+    parsed.load(cookie)
+
+    for key in ("__csrf", "csrf_token"):
+        if key in parsed:
+            value = parsed[key].value.strip()
+            if value:
+                return value
 
     raise RuntimeError(
-        "NETEASE_COOKIE does not contain __csrf. "
-        "Please update the NetEase cookie in GitHub Secrets."
+        "Could not find NetEase CSRF token. "
+        "Please add NETEASE_CSRF_TOKEN to GitHub Secrets, "
+        "or make sure your NETEASE_COOKIE contains __csrf."
     )
 
 
 def get_daily_recommendations(cookie: str) -> list[dict]:
     """
-    获取网易云音乐「个性化推荐 → 每日歌曲推荐」。
+    获取网易云音乐：
 
-    使用网易云网页实际使用的 WeAPI：
-    POST /weapi/v2/discovery/recommend/songs
+    个性化推荐 → 每日歌曲推荐
+
+    返回：
+    [
+        {
+            "name": "歌曲名",
+            "artists": ["歌手1", "歌手2"]
+        },
+        ...
+    ]
     """
 
     csrf_token = _get_csrf_token(cookie)
 
-    # This matches the parameters used by the NetEase web page.
-    payload = {
-        "limit": "30",
-        "offset": "0",
-        "total": "true",
-    }
-
-    encrypted_data = _weapi_encrypt(payload)
-
-    url = f"{WEAPI_URL}?csrf_token={csrf_token}"
-
     headers = {
         **HEADERS,
         "Cookie": cookie,
-        "Content-Type": "application/x-www-form-urlencoded",
+    }
+
+    params = {
+        "csrf_token": csrf_token,
     }
 
     print("Getting NetEase daily recommendations...")
 
-    response = requests.post(
-        url,
-        headers=headers,
-        data=encrypted_data,
-        timeout=30,
-    )
+    try:
+        response = requests.get(
+            NETEASE_DAILY_URL,
+            headers=headers,
+            params=params,
+            timeout=30,
+        )
 
-    response.raise_for_status()
+        response.raise_for_status()
 
-    data = response.json()
+    except requests.RequestException as exc:
+        raise RuntimeError(
+            f"Failed to request NetEase daily recommendations: {exc}"
+        ) from exc
+
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise RuntimeError(
+            "NetEase returned an invalid JSON response."
+        ) from exc
 
     if data.get("code") != 200:
         raise RuntimeError(
@@ -167,33 +114,37 @@ def get_daily_recommendations(cookie: str) -> list[dict]:
 
     if not songs:
         raise RuntimeError(
-            "NetEase returned no daily recommendations. "
-            "The cookie may be expired or invalid."
+            "NetEase returned 0 daily recommendations. "
+            "The cookie may have expired or the account session "
+            "may no longer be valid."
         )
 
     print(f"Found {len(songs)} NetEase daily recommendations.")
 
     print("\n===== NetEase Daily Recommendations =====")
 
+    results = []
+
     for index, song in enumerate(songs, start=1):
         name = song.get("name", "")
 
-        artists = ", ".join(
+        artists = [
             artist.get("name", "")
             for artist in song.get("ar", [])
-        )
+            if artist.get("name")
+        ]
 
-        print(f"{index:02d}. {name} - {artists}")
+        artist_text = ", ".join(artists)
+
+        print(f"{index:02d}. {name} - {artist_text}")
+
+        results.append(
+            {
+                "name": name,
+                "artists": artists,
+            }
+        )
 
     print("==========================================\n")
 
-    return [
-        {
-            "name": song.get("name", ""),
-            "artists": [
-                artist.get("name", "")
-                for artist in song.get("ar", [])
-            ],
-        }
-        for song in songs
-    ]
+    return results
