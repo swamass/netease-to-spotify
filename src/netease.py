@@ -1,5 +1,5 @@
+```python
 import base64
-import binascii
 import json
 import os
 import random
@@ -9,9 +9,7 @@ import requests
 from Crypto.Cipher import AES
 
 
-WEAPI_URL = (
-    "https://music.163.com/weapi/v2/discovery/recommend/songs"
-)
+WEAPI_URL = "https://music.163.com/weapi/v2/discovery/recommend/songs"
 
 IV = b"0102030405060708"
 PRESET_KEY = b"0CoJUm6Qyw8W8jud"
@@ -26,7 +24,6 @@ MODULUS = (
     "b3ece0462db0a22b8e7"
 )
 
-
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -35,6 +32,7 @@ HEADERS = {
     ),
     "Referer": "https://music.163.com/",
     "Origin": "https://music.163.com",
+    "Content-Type": "application/x-www-form-urlencoded",
 }
 
 
@@ -50,28 +48,17 @@ def _aes_encrypt(data: bytes, key: bytes) -> str:
 
 
 def _random_secret_key() -> bytes:
-    """
-    NetEase WeAPI 使用 16 字符的随机字符串作为第二层 AES key。
-    """
     chars = string.ascii_letters + string.digits
     return "".join(
-        random.choice(chars) for _ in range(16)
+        random.choice(chars)
+        for _ in range(16)
     ).encode("utf-8")
 
 
 def _rsa_encrypt(secret_key: bytes) -> str:
-    """
-    NetEase WeAPI RSA:
-    1. 反转 AES secret key
-    2. 转换为大整数
-    3. RSA modular exponentiation
-    """
-
-    reversed_key = secret_key[::-1]
-
-    text = int(
-        binascii.hexlify(reversed_key),
-        16,
+    text = int.from_bytes(
+        secret_key[::-1],
+        byteorder="big",
     )
 
     modulus = int(MODULUS, 16)
@@ -82,14 +69,13 @@ def _rsa_encrypt(secret_key: bytes) -> str:
         modulus,
     )
 
-    return format(encrypted, "x").zfill(256)
+    return format(
+        encrypted,
+        "x",
+    ).zfill(256)
 
 
 def _weapi_encrypt(payload: dict) -> dict:
-    """
-    生成网易云 WeAPI 所需的 params 和 encSecKey。
-    """
-
     text = json.dumps(
         payload,
         separators=(",", ":"),
@@ -98,19 +84,16 @@ def _weapi_encrypt(payload: dict) -> dict:
 
     secret_key = _random_secret_key()
 
-    # 第一层 AES
-    first = _aes_encrypt(
+    first_encrypt = _aes_encrypt(
         text,
         PRESET_KEY,
     )
 
-    # 第二层 AES
     params = _aes_encrypt(
-        first.encode("utf-8"),
+        first_encrypt.encode("utf-8"),
         secret_key,
     )
 
-    # RSA
     enc_sec_key = _rsa_encrypt(secret_key)
 
     return {
@@ -120,10 +103,6 @@ def _weapi_encrypt(payload: dict) -> dict:
 
 
 def _get_csrf_token() -> str:
-    """
-    从 GitHub Actions Secret 获取 CSRF Token。
-    """
-
     csrf_token = os.getenv(
         "NETEASE_CSRF_TOKEN",
         "",
@@ -131,7 +110,8 @@ def _get_csrf_token() -> str:
 
     if not csrf_token:
         raise RuntimeError(
-            "NETEASE_CSRF_TOKEN is missing."
+            "NETEASE_CSRF_TOKEN is missing. "
+            "Please add it to GitHub Secrets."
         )
 
     return csrf_token
@@ -140,7 +120,6 @@ def _get_csrf_token() -> str:
 def get_daily_recommendations(cookie: str) -> list[dict]:
     """
     获取网易云音乐：
-
     个性化推荐 → 每日歌曲推荐
     """
 
@@ -150,6 +129,7 @@ def get_daily_recommendations(cookie: str) -> list[dict]:
         "offset": "0",
         "total": "true",
         "limit": "30",
+        "csrf_token": csrf_token,
     }
 
     encrypted = _weapi_encrypt(payload)
@@ -157,20 +137,96 @@ def get_daily_recommendations(cookie: str) -> list[dict]:
     headers = {
         **HEADERS,
         "Cookie": cookie,
-        "Content-Type": "application/x-www-form-urlencoded",
     }
 
+    print("Getting NetEase daily recommendations...")
+
+    try:
+        response = requests.post(
+            f"{WEAPI_URL}?csrf_token={csrf_token}",
+            headers=headers,
+            data=encrypted,
+            timeout=30,
+        )
+
+        response.raise_for_status()
+
+    except requests.RequestException as exc:
+        raise RuntimeError(
+            f"Failed to request NetEase daily recommendations: {exc}"
+        ) from exc
+
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise RuntimeError(
+            "NetEase returned an invalid JSON response."
+        ) from exc
+
+    if data.get("code") != 200:
+        raise RuntimeError(
+            f"NetEase API returned code {data.get('code')}: "
+            f"{data.get('message', 'unknown error')}"
+        )
+
+    songs = (
+        data.get("data", {})
+        .get("dailySongs", [])
+    )
+
+    if not songs:
+        raise RuntimeError(
+            "NetEase returned 0 daily recommendations. "
+            "The NetEase cookie or CSRF token may be expired."
+        )
+
     print(
-        "Getting NetEase daily recommendations..."
+        f"Found {len(songs)} NetEase daily recommendations."
     )
 
-    response = requests.post(
-        f"{WEAPI_URL}?csrf_token={csrf_token}",
-        headers=headers,
-        data=encrypted,
-        timeout=30,
+    print("\n===== NetEase Daily Recommendations =====")
+
+    results = []
+
+    for index, song in enumerate(
+        songs,
+        start=1,
+    ):
+        name = song.get(
+            "name",
+            "",
+        )
+
+        artists = [
+            artist.get(
+                "name",
+                "",
+            )
+            for artist in song.get(
+                "ar",
+                [],
+            )
+            if artist.get("name")
+        ]
+
+        artist_text = ", ".join(artists)
+
+        print(
+            f"{index:02d}. "
+            f"{name} - "
+            f"{artist_text}"
+        )
+
+        results.append(
+            {
+                "name": name,
+                "artists": artists,
+            }
+        )
+
+    print(
+        "==========================================\n"
     )
 
-    response.raise_for_status()
-
-    data =
+    return results
+```
