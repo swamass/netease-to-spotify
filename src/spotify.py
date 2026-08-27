@@ -205,6 +205,7 @@ def add_tracks_to_playlist(
 
     print("Spotify response status:", response.status_code)
     print("Spotify response body:", response.text)
+    print("Spotify response headers:", dict(response.headers))
 
     response.raise_for_status()
 
