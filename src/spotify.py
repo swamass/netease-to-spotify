@@ -173,39 +173,38 @@ def add_tracks_to_playlist(
     playlist_id: str,
     track_ids: list[str],
 ) -> None:
-    """Add tracks to a Spotify playlist in batches of 100."""
+    """Diagnose playlist access without modifying the playlist."""
 
     if not track_ids:
         print("No tracks to add.")
         return
 
-    uris = [
-        f"spotify:track:{track_id}"
-        for track_id in track_ids
-    ]
+    playlist_url = (
+        f"{SPOTIFY_API_URL}/playlists/{playlist_id}"
+    )
 
-    for start in range(0, len(uris), 100):
-        batch = uris[start : start + 100]
+    print("Checking Spotify playlist access...")
 
-        response = requests.post(
-            f"{SPOTIFY_API_URL}/playlists/{playlist_id}/items",
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "uris": batch,
-            },
-            timeout=30,
-        )
+    response = requests.get(
+        playlist_url,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+        },
+        timeout=30,
+    )
 
-        if response.status_code != 201:
-            print("Spotify response status:", response.status_code)
-            print("Spotify response body:", response.text)
-            print("Spotify response headers:", dict(response.headers))
+    print("Playlist GET status:", response.status_code)
+    print("Playlist GET body:", response.text[:2000])
 
-        response.raise_for_status()
+    response.raise_for_status()
 
-        print(
-            f"Added {len(batch)} tracks to Spotify playlist."
-        )
+    data = response.json()
+
+    print("Playlist name:", data.get("name"))
+    print("Playlist ID:", data.get("id"))
+    print("Playlist owner:", data.get("owner", {}).get("id"))
+    print("Playlist public:", data.get("public"))
+
+    print()
+    print("Playlist access check passed.")
+    print("No tracks were added.")
