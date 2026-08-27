@@ -1,3 +1,5 @@
+import requests
+
 from src.config import load_settings
 from src.netease import get_daily_recommendations
 from src.spotify import (
@@ -5,6 +7,41 @@ from src.spotify import (
     get_access_token,
     search_track,
 )
+
+
+def check_playlist(
+    access_token: str,
+    playlist_id: str,
+) -> None:
+    """Check whether the Spotify playlist can be accessed."""
+    url = f"https://api.spotify.com/v1/playlists/{playlist_id}"
+
+    print("Checking Spotify playlist...")
+
+    response = requests.get(
+        url,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+        },
+        timeout=30,
+    )
+
+    print(f"Playlist check status: {response.status_code}")
+
+    if response.status_code != 200:
+        print("Playlist check response:")
+        print(response.text)
+
+        response.raise_for_status()
+
+    data = response.json()
+
+    playlist_name = data.get("name", "")
+    owner = data.get("owner", {}).get("display_name", "")
+
+    print(f"Playlist name: {playlist_name}")
+    print(f"Playlist owner: {owner}")
+    print("Spotify playlist access: OK")
 
 
 def main() -> None:
@@ -19,6 +56,11 @@ def main() -> None:
         settings.spotify_client_id,
         settings.spotify_client_secret,
         settings.spotify_refresh_token,
+    )
+
+    check_playlist(
+        access_token,
+        settings.spotify_playlist_id,
     )
 
     track_ids = []
