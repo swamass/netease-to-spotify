@@ -173,38 +173,37 @@ def add_tracks_to_playlist(
     playlist_id: str,
     track_ids: list[str],
 ) -> None:
-    """Diagnose playlist access without modifying the playlist."""
+    """Add tracks to a Spotify playlist in batches."""
 
     if not track_ids:
         print("No tracks to add.")
         return
 
-    playlist_url = (
-        f"{SPOTIFY_API_URL}/playlists/{playlist_id}"
-    )
+    uris = [
+        f"spotify:track:{track_id}"
+        for track_id in track_ids
+    ]
 
-    print("Checking Spotify playlist access...")
+    # Temporary test: add only one track.
+    batch = uris[:1]
 
-    response = requests.get(
-        playlist_url,
+    print("Trying to add 1 track to Spotify playlist...")
+
+    response = requests.post(
+        f"{SPOTIFY_API_URL}/playlists/{playlist_id}/items",
         headers={
             "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "uris": batch,
         },
         timeout=30,
     )
 
-    print("Playlist GET status:", response.status_code)
-    print("Playlist GET body:", response.text[:2000])
+    print("Spotify response status:", response.status_code)
+    print("Spotify response body:", response.text)
 
     response.raise_for_status()
 
-    data = response.json()
-
-    print("Playlist name:", data.get("name"))
-    print("Playlist ID:", data.get("id"))
-    print("Playlist owner:", data.get("owner", {}).get("id"))
-    print("Playlist public:", data.get("public"))
-
-    print()
-    print("Playlist access check passed.")
-    print("No tracks were added.")
+    print("Successfully added 1 track.")
