@@ -35,6 +35,8 @@ def get_access_token(
     response.raise_for_status()
 
     data = response.json()
+    
+    print("Spotify token scopes:", data.get("scope"))
 
     if "access_token" not in data:
         raise RuntimeError("Spotify did not return an access token.")
