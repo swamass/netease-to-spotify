@@ -199,6 +199,10 @@ def add_tracks_to_playlist(
             timeout=30,
         )
 
+        if response.status_code != 201:
+            print("Spotify response status:", response.status_code)
+            print("Spotify response body:", response.text)
+
         response.raise_for_status()
 
         print(
