@@ -5,6 +5,7 @@ from src.netease import get_daily_recommendations
 from src.spotify import (
     add_tracks_to_playlist,
     get_access_token,
+    SpotifyRateLimitError,
     replace_playlist_tracks,
     search_track,
 )
@@ -73,26 +74,29 @@ def main() -> None:
     track_ids = []
     seen_track_ids = set()
 
-    for song in songs:
-        track_id = search_track(
-            access_token,
-            song["name"],
-            song["artists"],
-            song.get("album", ""),
-        )
+    try:
+        for song in songs:
+            track_id = search_track(
+                access_token,
+                song["name"],
+                song["artists"],
+                song.get("album", ""),
+            )
 
-        if track_id and track_id not in seen_track_ids:
-            seen_track_ids.add(track_id)
-            track_ids.append(track_id)
-            print(
-                f"Matched: {song['name']} - "
-                f"{', '.join(song['artists'])}"
-            )
-        else:
-            print(
-                f"Not found: {song['name']} - "
-                f"{', '.join(song['artists'])}"
-            )
+            if track_id and track_id not in seen_track_ids:
+                seen_track_ids.add(track_id)
+                track_ids.append(track_id)
+                print(
+                    f"Matched: {song['name']} - "
+                    f"{', '.join(song['artists'])}"
+                )
+            else:
+                print(
+                    f"Not found: {song['name']} - "
+                    f"{', '.join(song['artists'])}"
+                )
+    except SpotifyRateLimitError as error:
+        raise RuntimeError(str(error)) from error
 
     print(f"Matched {len(track_ids)} tracks.")
 
