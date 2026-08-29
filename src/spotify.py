@@ -114,21 +114,22 @@ def _spotify_get(
     return None
 
 
+def _normalize_text(value: str) -> str:
+    """Normalize text for tolerant title and artist comparisons."""
+    return "".join(value.casefold().split())
+
+
 def search_track(
     access_token: str,
     name: str,
     artists: list[str],
 ) -> str | None:
-    """Search Spotify for a track and return its track ID."""
+    """Search Spotify while tolerating localized artist names."""
 
     if not name:
         return None
 
-    # First try: song title + first artist.
-    # This is more reliable than putting every collaborating artist
-    # into one strict Spotify search query.
     primary_artist = artists[0] if artists else ""
-
     queries = []
 
     if primary_artist:
@@ -136,17 +137,27 @@ def search_track(
             f'track:"{name}" artist:"{primary_artist}"'
         )
 
-    # Fallback: search by title only.
-    queries.append(f'track:"{name}"')
+    # Artist names may be localized differently between services. Always
+    # search by title as a fallback instead of trusting the artist string.
+    title_query = f'track:"{name}"'
+    queries.append(title_query)
 
-    for query in queries:
+    normalized_name = _normalize_text(name)
+    normalized_artists = {
+        _normalize_text(artist)
+        for artist in artists
+        if artist
+    }
+    candidates = []
+
+    for query_index, query in enumerate(queries):
         response = _spotify_get(
             f"{SPOTIFY_API_URL}/search",
             access_token,
             {
                 "q": query,
                 "type": "track",
-                "limit": 5,
+                "limit": 10,
             },
         )
 
@@ -155,23 +166,31 @@ def search_track(
 
         items = response.json().get("tracks", {}).get("items", [])
 
-        if not items:
-            continue
+        for item_index, item in enumerate(items):
+            item_name = _normalize_text(item.get("name", ""))
+            item_artists = {
+                _normalize_text(artist.get("name", ""))
+                for artist in item.get("artists", [])
+            }
+            title_score = 2 if item_name == normalized_name else 0
+            artist_score = 1 if normalized_artists & item_artists else 0
+            source_score = 1 if query_index == 1 else 0
+            candidates.append(
+                (title_score + artist_score + source_score, -item_index, item)
+            )
 
-        # Prefer an exact title match when possible.
-        normalized_name = name.strip().casefold()
+    if not candidates:
+        return None
 
-        for item in items:
-            item_name = item.get("name", "").strip().casefold()
+    candidates.sort(key=lambda candidate: (candidate[0], candidate[1]), reverse=True)
+    best_score, _, best_item = candidates[0]
 
-            if item_name == normalized_name:
-                return item["id"]
+    # Never use a loose title-only result when Spotify did not return the
+    # requested title exactly; this avoids replacing a song with an unrelated one.
+    if best_score < 2:
+        return None
 
-        # Otherwise use the first search result.
-        return items[0]["id"]
-
-    return None
-
+    return best_item.get("id")
 
 def replace_playlist_tracks(
     access_token: str,
