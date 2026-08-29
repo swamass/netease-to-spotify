@@ -124,23 +124,24 @@ def search_track(
     name: str,
     artists: list[str],
 ) -> str | None:
-    """Search Spotify while tolerating localized artist names."""
+    """Search Spotify and require a verified artist match."""
 
-    if not name:
+    if not name or not artists:
         return None
 
-    primary_artist = artists[0] if artists else ""
-    queries = []
+    primary_artist = artists[0]
+    response = _spotify_get(
+        f"{SPOTIFY_API_URL}/search",
+        access_token,
+        {
+            "q": f'track:"{name}" artist:"{primary_artist}"',
+            "type": "track",
+            "limit": 10,
+        },
+    )
 
-    if primary_artist:
-        queries.append(
-            f'track:"{name}" artist:"{primary_artist}"'
-        )
-
-    # Artist names may be localized differently between services. Always
-    # search by title as a fallback instead of trusting the artist string.
-    title_query = f'track:"{name}"'
-    queries.append(title_query)
+    if response is None:
+        return None
 
     normalized_name = _normalize_text(name)
     normalized_artists = {
@@ -148,49 +149,20 @@ def search_track(
         for artist in artists
         if artist
     }
-    candidates = []
 
-    for query_index, query in enumerate(queries):
-        response = _spotify_get(
-            f"{SPOTIFY_API_URL}/search",
-            access_token,
-            {
-                "q": query,
-                "type": "track",
-                "limit": 10,
-            },
-        )
+    for item in response.json().get("tracks", {}).get("items", []):
+        item_name = _normalize_text(item.get("name", ""))
+        item_artists = {
+            _normalize_text(artist.get("name", ""))
+            for artist in item.get("artists", [])
+        }
 
-        if response is None:
-            continue
+        if item_name == normalized_name and normalized_artists & item_artists:
+            return item.get("id")
 
-        items = response.json().get("tracks", {}).get("items", [])
-
-        for item_index, item in enumerate(items):
-            item_name = _normalize_text(item.get("name", ""))
-            item_artists = {
-                _normalize_text(artist.get("name", ""))
-                for artist in item.get("artists", [])
-            }
-            title_score = 2 if item_name == normalized_name else 0
-            artist_score = 1 if normalized_artists & item_artists else 0
-            source_score = 1 if query_index == 1 else 0
-            candidates.append(
-                (title_score + artist_score + source_score, -item_index, item)
-            )
-
-    if not candidates:
-        return None
-
-    candidates.sort(key=lambda candidate: (candidate[0], candidate[1]), reverse=True)
-    best_score, _, best_item = candidates[0]
-
-    # Never use a loose title-only result when Spotify did not return the
-    # requested title exactly; this avoids replacing a song with an unrelated one.
-    if best_score < 2:
-        return None
-
-    return best_item.get("id")
+    # A title-only match is intentionally rejected: identical song titles can
+    # belong to different artists, and localized names cannot be verified safely.
+    return None
 
 def replace_playlist_tracks(
     access_token: str,
