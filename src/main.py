@@ -78,6 +78,7 @@ def main() -> None:
             access_token,
             song["name"],
             song["artists"],
+            song.get("album", ""),
         )
 
         if track_id and track_id not in seen_track_ids:
