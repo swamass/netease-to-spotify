@@ -71,6 +71,7 @@ def main() -> None:
     )
 
     track_ids = []
+    seen_track_ids = set()
 
     for song in songs:
         track_id = search_track(
@@ -79,7 +80,8 @@ def main() -> None:
             song["artists"],
         )
 
-        if track_id:
+        if track_id and track_id not in seen_track_ids:
+            seen_track_ids.add(track_id)
             track_ids.append(track_id)
             print(
                 f"Matched: {song['name']} - "
