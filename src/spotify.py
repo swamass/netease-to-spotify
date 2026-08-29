@@ -119,39 +119,56 @@ def _normalize_text(value: str) -> str:
     return "".join(value.casefold().split())
 
 
+ARTIST_ALIASES = {
+    "久石譲": ["Joe Hisaishi"],
+    "山下達郎": ["Tatsuro Yamashita"],
+    "竹内まりや": ["Mariya Takeuchi"],
+    "清塚信也": ["Shinya Kiyozuka"],
+    "NAOTO": ["Naoto"],
+    "CAGNET": ["Cagnet"],
+}
+
+
+def _title_variants(name: str) -> list[str]:
+    """Create safe title variants for remaster and edition suffixes."""
+    variants = [name]
+    base_name = name.split(" [", 1)[0].split(" (", 1)[0].strip()
+    if base_name and base_name != name:
+        variants.append(base_name)
+    return variants
+
+
 def search_track(
     access_token: str,
     name: str,
     artists: list[str],
 ) -> str | None:
-    """Search Spotify using the source artist as a constraint."""
+    """Search Spotify with title variants and verified artist constraints."""
 
     if not name or not artists:
         return None
 
-    primary_artist = artists[0]
-    response = _spotify_get(
-        f"{SPOTIFY_API_URL}/search",
-        access_token,
-        {
-            "q": f'track:"{name}" artist:"{primary_artist}"',
-            "type": "track",
-            "limit": 10,
-        },
-    )
+    artist_queries = [artists[0], *ARTIST_ALIASES.get(artists[0], [])]
+    normalized_names = {_normalize_text(title) for title in _title_variants(name)}
 
-    if response is None:
-        return None
+    for artist in artist_queries:
+        for title in _title_variants(name):
+            response = _spotify_get(
+                f"{SPOTIFY_API_URL}/search",
+                access_token,
+                {
+                    "q": f'track:"{title}" artist:"{artist}"',
+                    "type": "track",
+                    "limit": 10,
+                },
+            )
 
-    normalized_name = _normalize_text(name)
-    items = response.json().get("tracks", {}).get("items", [])
+            if response is None:
+                continue
 
-    # The artist is deliberately included in the Spotify query. This allows
-    # Spotify to resolve localized artist names while exact title matching
-    # prevents an unrelated same-title track from being selected.
-    for item in items:
-        if _normalize_text(item.get("name", "")) == normalized_name:
-            return item.get("id")
+            for item in response.json().get("tracks", {}).get("items", []):
+                if _normalize_text(item.get("name", "")) in normalized_names:
+                    return item.get("id")
 
     return None
 
