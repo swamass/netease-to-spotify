@@ -5,6 +5,7 @@ from src.netease import get_daily_recommendations
 from src.spotify import (
     add_tracks_to_playlist,
     get_access_token,
+    replace_playlist_tracks,
     search_track,
 )
 
@@ -51,6 +52,12 @@ def main() -> None:
     songs = get_daily_recommendations(settings.netease_cookie)
     print(f"Found {len(songs)} NetEase daily recommendations.")
 
+    if not songs:
+        raise RuntimeError(
+            "NetEase returned an empty recommendation list. "
+            "Keeping the existing Spotify playlist."
+        )
+
     print("Getting Spotify access token...")
     access_token = get_access_token(
         settings.spotify_client_id,
@@ -86,7 +93,13 @@ def main() -> None:
 
     print(f"Matched {len(track_ids)} tracks.")
 
-    add_tracks_to_playlist(
+    if not track_ids:
+        raise RuntimeError(
+            "No NetEase recommendations matched valid Spotify tracks. "
+            "Keeping the existing Spotify playlist."
+        )
+
+    replace_playlist_tracks(
         access_token,
         settings.spotify_playlist_id,
         track_ids,
