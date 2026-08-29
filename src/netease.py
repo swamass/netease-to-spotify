@@ -112,6 +112,20 @@ def _encrypt_request(payload: dict) -> dict:
     }
 
 
+def _get_artist_names(song: dict) -> list[str]:
+    """Read artist names across NetEase response field variants."""
+    raw_artists = song.get("ar") or song.get("artists") or song.get("artist") or []
+
+    if isinstance(raw_artists, dict):
+        raw_artists = [raw_artists]
+
+    return [
+        artist.get("name", "")
+        for artist in raw_artists
+        if isinstance(artist, dict) and artist.get("name")
+    ]
+
+
 def get_daily_recommendations(cookie: str) -> list[dict]:
     """
     获取网易云音乐：
@@ -172,10 +186,7 @@ def get_daily_recommendations(cookie: str) -> list[dict]:
     for index, song in enumerate(songs, start=1):
         name = song.get("name", "")
 
-        artists = ", ".join(
-            artist.get("name", "")
-            for artist in song.get("ar", [])
-        )
+        artists = ", ".join(_get_artist_names(song))
 
         print(f"{index:02d}. {name} - {artists}")
 
@@ -185,10 +196,7 @@ def get_daily_recommendations(cookie: str) -> list[dict]:
     return [
         {
             "name": song.get("name", ""),
-            "artists": [
-                artist.get("name", "")
-                for artist in song.get("ar", [])
-            ],
+            "artists": _get_artist_names(song),
         }
         for song in songs
     ]
