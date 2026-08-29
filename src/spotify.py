@@ -161,6 +161,7 @@ def search_track(
     access_token: str,
     name: str,
     artists: list[str],
+    album: str = "",
 ) -> str | None:
     """Search Spotify with title variants and verified artist constraints."""
 
@@ -176,12 +177,13 @@ def search_track(
         if artist
     }
     normalized_names = {_normalize_text(title) for title in _title_variants(name)}
+    album_query = f" album:\"{album}\"" if album else ""
 
     for artist in artist_queries:
         for title in _title_variants(name):
             queries = [
-                f'track:"{title}" artist:"{artist}"',
-                f"{title} {artist}",
+                f'track:"{title}" artist:"{artist}"{album_query}',
+                f"{title} {artist} {album}".strip(),
             ]
 
             for query in queries:
@@ -208,6 +210,11 @@ def search_track(
                     }
 
                     if normalized_artist_queries & item_artists:
+                        if album and item.get("album", {}).get("name"):
+                            normalized_album = _normalize_text(album)
+                            item_album = _normalize_text(item["album"]["name"])
+                            if normalized_album not in item_album and item_album not in normalized_album:
+                                continue
                         return item.get("id")
 
     return None
