@@ -173,6 +173,26 @@ def search_track(
     return None
 
 
+def replace_playlist_tracks(
+    access_token: str,
+    playlist_id: str,
+) -> None:
+    """Remove all existing tracks using Spotify's playlist replace endpoint."""
+    response = requests.put(
+        f"{SPOTIFY_API_URL}/playlists/{playlist_id}/items",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        },
+        json={"uris": []},
+        timeout=30,
+    )
+
+    print("Spotify playlist clear status:", response.status_code)
+    response.raise_for_status()
+
+    print("Cleared existing Spotify playlist tracks.")
+
 def add_tracks_to_playlist(
     access_token: str,
     playlist_id: str,
