@@ -126,12 +126,18 @@ ARTIST_ALIASES = {
     "清塚信也": ["Shinya Kiyozuka"],
     "NAOTO": ["Naoto"],
     "CAGNET": ["Cagnet"],
+    "Paul McCartney": ["Michael Jackson"],
+}
+
+TITLE_ALIASES = {
+    "Just My Imagination": ["Just My Imagination (Running Away with Me)"],
+    "トゥルー・トゥ・ユア・ハート(キャグネット)": ["True to Your Heart"],
 }
 
 
 def _title_variants(name: str) -> list[str]:
     """Create safe title variants for remaster and edition suffixes."""
-    variants = [name]
+    variants = [name, *TITLE_ALIASES.get(name, [])]
     base_name = name.split(" [", 1)[0].split(" (", 1)[0].strip()
     if base_name and base_name != name:
         variants.append(base_name)
@@ -148,7 +154,9 @@ def search_track(
     if not name or not artists:
         return None
 
-    artist_queries = [artists[0], *ARTIST_ALIASES.get(artists[0], [])]
+    artist_queries = []
+    for artist in artists:
+        artist_queries.extend([artist, *ARTIST_ALIASES.get(artist, [])])
     normalized_names = {_normalize_text(title) for title in _title_variants(name)}
 
     for artist in artist_queries:
