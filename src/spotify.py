@@ -1,5 +1,6 @@
 import base64
 import time
+import unicodedata
 
 import requests
 
@@ -115,8 +116,9 @@ def _spotify_get(
 
 
 def _normalize_text(value: str) -> str:
-    """Normalize text for tolerant title and artist comparisons."""
-    return "".join(value.casefold().split())
+    """Normalize text while ignoring punctuation and presentation differences."""
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    return "".join(character for character in normalized if character.isalnum())
 
 
 ARTIST_ALIASES = {
@@ -132,6 +134,14 @@ ARTIST_ALIASES = {
 TITLE_ALIASES = {
     "Just My Imagination": ["Just My Imagination (Running Away with Me)"],
     "トゥルー・トゥ・ユア・ハート(キャグネット)": ["True to Your Heart"],
+}
+
+TITLE_ALIASES = {
+    "マイ・ベイビー・クイーン": ["My Baby Queen"],
+    "トゥルー・トゥ・ユア・ハート(キャグネット)": [
+        "True to Your Heart",
+        "True to Your Heart (From Mulan)",
+    ],
 }
 
 
