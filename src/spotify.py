@@ -145,8 +145,21 @@ VERSION_TERMS = {
 }
 
 
+def _title_core(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    normalized = re.sub(
+        r"\\s*\\((?:with|feat\\.?|featuring)\\b[^)]*\\)",
+        "",
+        normalized,
+    )
+    return normalized.strip()
+
+
 def _title_variants(name: str) -> list[str]:
     variants = [name, *TITLE_ALIASES.get(name, [])]
+    core_name = _title_core(name)
+    if core_name != name.casefold().strip():
+        variants.append(core_name)
     base_name = name.split(" [", 1)[0].split(" (", 1)[0].strip()
     if base_name and base_name != name:
         variants.append(base_name)
@@ -167,7 +180,7 @@ def search_track(
     artists: list[str],
     album: str = "",
 ) -> str | None:
-    """Select a sufficiently reliable Spotify candidate."""
+    """Find a track using fallback queries and strict candidate validation."""
     if not name or not artists:
         print(f"Not found: {name} - missing artist metadata")
         return None
@@ -179,48 +192,85 @@ def search_track(
         if value
     ]
     normalized_artists = {_normalize_text(value) for value in artist_queries}
-    normalized_titles = {_normalize_text(value) for value in _title_variants(name)}
+    normalized_titles = {
+        _normalize_text(value) for value in _title_variants(name)
+    }
     source_versions = _version_terms(name)
     source_album = _normalize_text(album)
     candidates = {}
 
-    for artist in artist_queries:
-        for title in _title_variants(name):
+    for title in _title_variants(name):
+        for artist in artist_queries:
             queries = [
                 f'track:"{title}" artist:"{artist}"'
                 + (f' album:"{album}"' if album else ""),
-                f"{title} {artist} {album}".strip(),
+                f"{title} {artist}".strip(),
             ]
             for query in queries:
+                print(f"Spotify search query: {query}")
                 response = _spotify_get(
                     f"{SPOTIFY_API_URL}/search",
                     access_token,
                     {"q": query, "type": "track", "limit": 10},
                 )
                 if response is None:
+                    print("Search result: request failed")
                     continue
-                for item in response.json().get("tracks", {}).get("items", []):
-                    if _normalize_text(item.get("name", "")) not in normalized_titles:
-                        continue
+
+                items = response.json().get("tracks", {}).get("items", [])
+                print(f"Search result: {len(items)} candidates")
+                for item in items:
+                    item_name = item.get("name", "")
                     item_artists = {
                         _normalize_text(value.get("name", ""))
                         for value in item.get("artists", [])
                     }
-                    artist_matches = normalized_artists & item_artists
-                    if not artist_matches:
-                        continue
                     item_album_name = item.get("album", {}).get("name", "")
                     item_album = _normalize_text(item_album_name)
-                    item_versions = _version_terms(item.get("name", "")) | _version_terms(item_album_name)
-                    if source_versions != item_versions and source_versions != (source_versions & item_versions):
-                        continue
+                    reasons = []
+
+                    if _normalize_text(item_name) not in normalized_titles:
+                        reasons.append("title mismatch")
+                    artist_matches = normalized_artists & item_artists
+                    if not artist_matches:
+                        reasons.append("artist mismatch")
+
+                    source_versions_now = source_versions
+                    item_versions = (
+                        _version_terms(item_name)
+                        | _version_terms(item_album_name)
+                    )
+                    if source_versions_now != item_versions and (
+                        source_versions_now
+                        != source_versions_now & item_versions
+                    ):
+                        reasons.append("version mismatch")
+
                     album_match = bool(source_album and (
                         source_album in item_album or item_album in source_album
                     ))
-                    score = 100 * len(artist_matches) + 50 * int(album_match) + 30
+                    if source_album and not album_match:
+                        reasons.append("album mismatch")
+
+                    if reasons:
+                        print(
+                            f"Rejected candidate: {item_name} - "
+                            f"{item_album_name} ({', '.join(reasons)})"
+                        )
+                        continue
+
+                    score = (
+                        100 * len(artist_matches)
+                        + 60 * int(album_match)
+                        + 40
+                    )
                     item_id = item.get("id")
                     if item_id:
-                        candidates[item_id] = (score, item)
+                        candidates[item_id] = max(
+                            candidates.get(item_id, (0, item)),
+                            (score, item),
+                            key=lambda value: value[0],
+                        )
 
     if not candidates:
         print(f"Not found: {name} - no sufficiently reliable candidate")
@@ -228,8 +278,11 @@ def search_track(
 
     score, item = max(candidates.values(), key=lambda value: value[0])
     print(
+        f"Matched candidate: {item.get('name', '')} - "
+        f"{', '.join(value.get('name', '') for value in item.get('artists', []))} - "
+        f"{item.get('album', {}).get('name', '')}; "
         f"Match reason: title + artist"
-        + (" + album" if score >= 180 else "")
+        + (" + album" if score >= 200 else "")
     )
     return item.get("id")
 
