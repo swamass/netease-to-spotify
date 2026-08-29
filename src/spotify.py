@@ -14,6 +14,10 @@ RETRY_DELAYS = [2, 5, 10]
 MAX_RETRY_AFTER_SECONDS = 15
 
 
+class SpotifyRateLimitError(RuntimeError):
+    """Raised when Spotify asks the whole sync to stop waiting."""
+
+
 def get_access_token(
     client_id: str,
     client_secret: str,
@@ -78,9 +82,12 @@ def _spotify_get(
                 if wait_seconds > MAX_RETRY_AFTER_SECONDS:
                     print(
                         f"Retry-After exceeds {MAX_RETRY_AFTER_SECONDS}s; "
-                        "skipping this query."
+                        "aborting all Spotify searches."
                     )
-                    return None
+                    raise SpotifyRateLimitError(
+                        "Spotify rate limit detected; aborting sync to protect "
+                        "existing playlist."
+                    )
 
                 time.sleep(wait_seconds)
                 continue
