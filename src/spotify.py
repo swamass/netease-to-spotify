@@ -163,7 +163,7 @@ def search_track(
     artists: list[str],
     album: str = "",
 ) -> str | None:
-    """Search Spotify with title variants and verified artist constraints."""
+    """Select the best Spotify result using weighted metadata matching."""
 
     if not name or not artists:
         return None
@@ -171,16 +171,22 @@ def search_track(
     artist_queries = []
     for artist in artists:
         artist_queries.extend([artist, *ARTIST_ALIASES.get(artist, [])])
+
     normalized_artist_queries = {
         _normalize_text(artist)
         for artist in artist_queries
         if artist
     }
-    normalized_names = {_normalize_text(title) for title in _title_variants(name)}
-    album_query = f" album:\"{album}\"" if album else ""
+    normalized_names = {
+        _normalize_text(title)
+        for title in _title_variants(name)
+    }
+    normalized_album = _normalize_text(album)
+    candidates = {}
 
     for artist in artist_queries:
         for title in _title_variants(name):
+            album_query = f' album:"{album}"' if album else ""
             queries = [
                 f'track:"{title}" artist:"{artist}"{album_query}',
                 f"{title} {artist} {album}".strip(),
@@ -201,23 +207,39 @@ def search_track(
                     continue
 
                 for item in response.json().get("tracks", {}).get("items", []):
-                    if _normalize_text(item.get("name", "")) not in normalized_names:
+                    item_name = _normalize_text(item.get("name", ""))
+                    if item_name not in normalized_names:
                         continue
 
                     item_artists = {
-                        _normalize_text(artist.get("name", ""))
-                        for artist in item.get("artists", [])
+                        _normalize_text(value.get("name", ""))
+                        for value in item.get("artists", [])
                     }
+                    artist_matches = normalized_artist_queries & item_artists
+                    if not artist_matches:
+                        continue
 
-                    if normalized_artist_queries & item_artists:
-                        if album and item.get("album", {}).get("name"):
-                            normalized_album = _normalize_text(album)
-                            item_album = _normalize_text(item["album"]["name"])
-                            if normalized_album not in item_album and item_album not in normalized_album:
-                                continue
-                        return item.get("id")
+                    item_album = _normalize_text(
+                        item.get("album", {}).get("name", "")
+                    )
+                    title_score = 30
+                    artist_score = 100 * len(artist_matches)
+                    album_score = 50 if normalized_album and (
+                        normalized_album in item_album
+                        or item_album in normalized_album
+                    ) else 0
+                    score = title_score + artist_score + album_score
+                    item_id = item.get("id")
+                    if item_id:
+                        candidates[item_id] = max(
+                            score,
+                            candidates.get(item_id, 0),
+                        )
 
-    return None
+    if not candidates:
+        return None
+
+    return max(candidates, key=candidates.get)
 
 def replace_playlist_tracks(
     access_token: str,
