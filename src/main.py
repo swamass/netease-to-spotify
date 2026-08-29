@@ -102,6 +102,11 @@ def main() -> None:
     replace_playlist_tracks(
         access_token,
         settings.spotify_playlist_id,
+    )
+
+    add_tracks_to_playlist(
+        access_token,
+        settings.spotify_playlist_id,
         track_ids,
     )
 
