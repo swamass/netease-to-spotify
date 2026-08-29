@@ -124,7 +124,7 @@ def search_track(
     name: str,
     artists: list[str],
 ) -> str | None:
-    """Search Spotify and require a verified artist match."""
+    """Search Spotify using the source artist as a constraint."""
 
     if not name or not artists:
         return None
@@ -144,24 +144,15 @@ def search_track(
         return None
 
     normalized_name = _normalize_text(name)
-    normalized_artists = {
-        _normalize_text(artist)
-        for artist in artists
-        if artist
-    }
+    items = response.json().get("tracks", {}).get("items", [])
 
-    for item in response.json().get("tracks", {}).get("items", []):
-        item_name = _normalize_text(item.get("name", ""))
-        item_artists = {
-            _normalize_text(artist.get("name", ""))
-            for artist in item.get("artists", [])
-        }
-
-        if item_name == normalized_name and normalized_artists & item_artists:
+    # The artist is deliberately included in the Spotify query. This allows
+    # Spotify to resolve localized artist names while exact title matching
+    # prevents an unrelated same-title track from being selected.
+    for item in items:
+        if _normalize_text(item.get("name", "")) == normalized_name:
             return item.get("id")
 
-    # A title-only match is intentionally rejected: identical song titles can
-    # belong to different artists, and localized names cannot be verified safely.
     return None
 
 def replace_playlist_tracks(
