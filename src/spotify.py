@@ -128,12 +128,6 @@ ARTIST_ALIASES = {
     "清塚信也": ["Shinya Kiyozuka"],
     "NAOTO": ["Naoto"],
     "CAGNET": ["Cagnet"],
-    "Paul McCartney": ["Michael Jackson"],
-}
-
-TITLE_ALIASES = {
-    "Just My Imagination": ["Just My Imagination (Running Away with Me)"],
-    "トゥルー・トゥ・ユア・ハート(キャグネット)": ["True to Your Heart"],
 }
 
 TITLE_ALIASES = {
@@ -142,11 +136,16 @@ TITLE_ALIASES = {
         "True to Your Heart",
         "True to Your Heart (From Mulan)",
     ],
+    "Just My Imagination": ["Just My Imagination (Running Away with Me)"],
+}
+
+VERSION_TERMS = {
+    "remix", "remixed", "live", "acoustic", "edit", "radioedit",
+    "version", "remaster", "remastered", "demo", "instrumental",
 }
 
 
 def _title_variants(name: str) -> list[str]:
-    """Create safe title variants for remaster and edition suffixes."""
     variants = [name, *TITLE_ALIASES.get(name, [])]
     base_name = name.split(" [", 1)[0].split(" (", 1)[0].strip()
     if base_name and base_name != name:
@@ -157,89 +156,82 @@ def _title_variants(name: str) -> list[str]:
     return list(dict.fromkeys(variants))
 
 
+def _version_terms(value: str) -> set[str]:
+    normalized = _normalize_text(value)
+    return {term for term in VERSION_TERMS if term in normalized}
+
+
 def search_track(
     access_token: str,
     name: str,
     artists: list[str],
     album: str = "",
 ) -> str | None:
-    """Select the best Spotify result using weighted metadata matching."""
-
+    """Select a sufficiently reliable Spotify candidate."""
     if not name or not artists:
+        print(f"Not found: {name} - missing artist metadata")
         return None
 
-    artist_queries = []
-    for artist in artists:
-        artist_queries.extend([artist, *ARTIST_ALIASES.get(artist, [])])
-
-    normalized_artist_queries = {
-        _normalize_text(artist)
-        for artist in artist_queries
-        if artist
-    }
-    normalized_names = {
-        _normalize_text(title)
-        for title in _title_variants(name)
-    }
-    normalized_album = _normalize_text(album)
+    artist_queries = [
+        value
+        for artist in artists
+        for value in [artist, *ARTIST_ALIASES.get(artist, [])]
+        if value
+    ]
+    normalized_artists = {_normalize_text(value) for value in artist_queries}
+    normalized_titles = {_normalize_text(value) for value in _title_variants(name)}
+    source_versions = _version_terms(name)
+    source_album = _normalize_text(album)
     candidates = {}
 
     for artist in artist_queries:
         for title in _title_variants(name):
-            album_query = f' album:"{album}"' if album else ""
             queries = [
-                f'track:"{title}" artist:"{artist}"{album_query}',
+                f'track:"{title}" artist:"{artist}"'
+                + (f' album:"{album}"' if album else ""),
                 f"{title} {artist} {album}".strip(),
             ]
-
             for query in queries:
                 response = _spotify_get(
                     f"{SPOTIFY_API_URL}/search",
                     access_token,
-                    {
-                        "q": query,
-                        "type": "track",
-                        "limit": 10,
-                    },
+                    {"q": query, "type": "track", "limit": 10},
                 )
-
                 if response is None:
                     continue
-
                 for item in response.json().get("tracks", {}).get("items", []):
-                    item_name = _normalize_text(item.get("name", ""))
-                    if item_name not in normalized_names:
+                    if _normalize_text(item.get("name", "")) not in normalized_titles:
                         continue
-
                     item_artists = {
                         _normalize_text(value.get("name", ""))
                         for value in item.get("artists", [])
                     }
-                    artist_matches = normalized_artist_queries & item_artists
+                    artist_matches = normalized_artists & item_artists
                     if not artist_matches:
                         continue
-
-                    item_album = _normalize_text(
-                        item.get("album", {}).get("name", "")
-                    )
-                    title_score = 30
-                    artist_score = 100 * len(artist_matches)
-                    album_score = 50 if normalized_album and (
-                        normalized_album in item_album
-                        or item_album in normalized_album
-                    ) else 0
-                    score = title_score + artist_score + album_score
+                    item_album_name = item.get("album", {}).get("name", "")
+                    item_album = _normalize_text(item_album_name)
+                    item_versions = _version_terms(item.get("name", "")) | _version_terms(item_album_name)
+                    if source_versions != item_versions and source_versions != (source_versions & item_versions):
+                        continue
+                    album_match = bool(source_album and (
+                        source_album in item_album or item_album in source_album
+                    ))
+                    score = 100 * len(artist_matches) + 50 * int(album_match) + 30
                     item_id = item.get("id")
                     if item_id:
-                        candidates[item_id] = max(
-                            score,
-                            candidates.get(item_id, 0),
-                        )
+                        candidates[item_id] = (score, item)
 
     if not candidates:
+        print(f"Not found: {name} - no sufficiently reliable candidate")
         return None
 
-    return max(candidates, key=candidates.get)
+    score, item = max(candidates.values(), key=lambda value: value[0])
+    print(
+        f"Match reason: title + artist"
+        + (" + album" if score >= 180 else "")
+    )
+    return item.get("id")
 
 def replace_playlist_tracks(
     access_token: str,
