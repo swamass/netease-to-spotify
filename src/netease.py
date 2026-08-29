@@ -197,6 +197,7 @@ def get_daily_recommendations(cookie: str) -> list[dict]:
         {
             "name": song.get("name", ""),
             "artists": _get_artist_names(song),
+            "album": song.get("al", {}).get("name", "") or song.get("album", {}).get("name", ""),
         }
         for song in songs
     ]
