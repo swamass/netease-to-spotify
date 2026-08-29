@@ -170,6 +170,11 @@ def search_track(
     artist_queries = []
     for artist in artists:
         artist_queries.extend([artist, *ARTIST_ALIASES.get(artist, [])])
+    normalized_artist_queries = {
+        _normalize_text(artist)
+        for artist in artist_queries
+        if artist
+    }
     normalized_names = {_normalize_text(title) for title in _title_variants(name)}
 
     for artist in artist_queries:
@@ -194,7 +199,15 @@ def search_track(
                     continue
 
                 for item in response.json().get("tracks", {}).get("items", []):
-                    if _normalize_text(item.get("name", "")) in normalized_names:
+                    if _normalize_text(item.get("name", "")) not in normalized_names:
+                        continue
+
+                    item_artists = {
+                        _normalize_text(artist.get("name", ""))
+                        for artist in item.get("artists", [])
+                    }
+
+                    if normalized_artist_queries & item_artists:
                         return item.get("id")
 
     return None
