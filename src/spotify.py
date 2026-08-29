@@ -35,7 +35,7 @@ def get_access_token(
     response.raise_for_status()
 
     data = response.json()
-    
+
     print("Spotify token scopes:", data.get("scope"))
 
     if "access_token" not in data:
@@ -105,7 +105,10 @@ def _spotify_get(
                 time.sleep(wait_seconds)
                 continue
 
-            print(f"Spotify request failed after {MAX_RETRIES} attempts: {error}")
+            print(
+                f"Spotify request failed after "
+                f"{MAX_RETRIES} attempts: {error}"
+            )
             return None
 
     return None
@@ -175,7 +178,7 @@ def add_tracks_to_playlist(
     playlist_id: str,
     track_ids: list[str],
 ) -> None:
-    """Add tracks to a Spotify playlist in batches."""
+    """Add all tracks to a Spotify playlist in batches of 100."""
 
     if not track_ids:
         print("No tracks to add.")
@@ -186,27 +189,34 @@ def add_tracks_to_playlist(
         for track_id in track_ids
     ]
 
-    # Temporary test: add only one track.
-    batch = uris[:1]
+    for start in range(0, len(uris), 100):
+        batch = uris[start : start + 100]
 
-    print("Trying to add 1 track to Spotify playlist...")
+        print(
+            f"Trying to add {len(batch)} tracks "
+            f"to Spotify playlist..."
+        )
 
-    response = requests.post(
-        f"{SPOTIFY_API_URL}/playlists/{playlist_id}/items",
-        headers={
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "uris": batch,
-        },
-        timeout=30,
-    )
+        response = requests.post(
+            f"{SPOTIFY_API_URL}/playlists/{playlist_id}/items",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "uris": batch,
+            },
+            timeout=30,
+        )
 
-    print("Spotify response status:", response.status_code)
-    print("Spotify response body:", response.text)
-    print("Spotify response headers:", dict(response.headers))
+        print("Spotify response status:", response.status_code)
+        print("Spotify response body:", response.text)
 
-    response.raise_for_status()
+        if response.status_code != 201:
+            print("Spotify response headers:", dict(response.headers))
 
-    print("Successfully added 1 track.")
+        response.raise_for_status()
+
+        print(
+            f"Successfully added {len(batch)} tracks."
+        )
