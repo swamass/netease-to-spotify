@@ -141,7 +141,10 @@ def _title_variants(name: str) -> list[str]:
     base_name = name.split(" [", 1)[0].split(" (", 1)[0].strip()
     if base_name and base_name != name:
         variants.append(base_name)
-    return variants
+    hyphen_name = name.split(" - ", 1)[0].strip()
+    if hyphen_name and hyphen_name != name:
+        variants.append(hyphen_name)
+    return list(dict.fromkeys(variants))
 
 
 def search_track(
@@ -161,22 +164,28 @@ def search_track(
 
     for artist in artist_queries:
         for title in _title_variants(name):
-            response = _spotify_get(
-                f"{SPOTIFY_API_URL}/search",
-                access_token,
-                {
-                    "q": f'track:"{title}" artist:"{artist}"',
-                    "type": "track",
-                    "limit": 10,
-                },
-            )
+            queries = [
+                f'track:"{title}" artist:"{artist}"',
+                f"{title} {artist}",
+            ]
 
-            if response is None:
-                continue
+            for query in queries:
+                response = _spotify_get(
+                    f"{SPOTIFY_API_URL}/search",
+                    access_token,
+                    {
+                        "q": query,
+                        "type": "track",
+                        "limit": 10,
+                    },
+                )
 
-            for item in response.json().get("tracks", {}).get("items", []):
-                if _normalize_text(item.get("name", "")) in normalized_names:
-                    return item.get("id")
+                if response is None:
+                    continue
+
+                for item in response.json().get("tracks", {}).get("items", []):
+                    if _normalize_text(item.get("name", "")) in normalized_names:
+                        return item.get("id")
 
     return None
 
