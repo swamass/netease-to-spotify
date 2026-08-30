@@ -167,3 +167,21 @@ def test_all_explicit_recording_conflicts_are_rejected(monkeypatch):
     for marker in ["Live Version", "Remix", "Acoustic", "Instrumental", "Demo", "Radio Edit", "Extended Mix", "DJ Version", "Tribute", "Cover", "Karaoke"]:
         result = run_search(monkeypatch, "Romeo And Juliet", ["Dire Straits"], "Brothers in Arms", [track("wrong", f"Romeo And Juliet - {marker}", ["Dire Straits"], "Brothers in Arms")])
         assert result is None
+
+
+def test_murata_song_accepts_remaster_from_different_album(monkeypatch):
+    result = run_search(
+        monkeypatch,
+        "電話しても",
+        ["村田和人"],
+        "Real Collection 1982-1984",
+        [
+            track(
+                "murata-2002-remaster",
+                "電話しても - 2002 Remaster",
+                ["Kazuhito Murata"],
+                "Treasures in the Box - 1982-1984",
+            )
+        ],
+    )
+    assert result == "murata-2002-remaster"
