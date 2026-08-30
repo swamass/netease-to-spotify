@@ -164,35 +164,36 @@ TITLE_ALIASES = {
 VERSION_TERMS = {
     "remix", "remixed", "live", "acoustic", "edit", "radioedit",
     "version", "remaster", "remastered", "demo", "instrumental",
-    "tribute", "cover", "karaoke",
+    "extendedmix", "djversion", "tribute", "cover", "karaoke",
 }
-HARD_VERSION_TERMS = {"live", "remix", "acoustic", "instrumental", "demo", "radioedit"}
+HARD_VERSION_TERMS = {
+    "live", "remix", "acoustic", "instrumental", "demo", "radioedit",
+    "extendedmix", "djversion",
+}
 INVALID_RELEASE_TERMS = {"tribute", "cover", "karaoke"}
 
 
 def _title_core(value: str) -> str:
-    normalized = unicodedata.normalize("NFKC", value).casefold()
+    normalized = unicodedata.normalize("NFKC", value).casefold().strip()
     normalized = re.sub(
-        r"\\s*\\((?:with|feat\\.?|featuring)\\b[^)]*\\)",
+        r"\s*\((?:with|feat\.?|featuring)\b[^)]*\)",
         "",
         normalized,
     )
     normalized = re.sub(
-        r"\\s*-\\s*(?:from\\s+)?[\\\"“”][^\\\"“”]+[\\\"“”]$",
+        r"\s*-\s*from\s+[\"“”][^\"“”]+[\"“”]\s*$",
         "",
         normalized,
     )
     normalized = re.sub(
-        r"\\s*-\\s*\\d{4}\\s+(?:remaster(?:ed)?|version)$",
+        r"\s*-\s*(?:\\d{4}\\s+)?remaster(?:ed)?\\s*$",
         "",
         normalized,
-        flags=re.IGNORECASE,
     )
     normalized = re.sub(
-        r"\\s*\\((?:remaster(?:ed)?|\\d{4}\\s+remaster(?:ed)?|version)\\)$",
+        r"\s*\\((?:\\d{4}\\s+)?remaster(?:ed)?|version)\\s*\\)\s*$",
         "",
         normalized,
-        flags=re.IGNORECASE,
     )
     return normalized.strip()
 
@@ -208,15 +209,6 @@ def _title_match(source: str, candidate: str) -> bool:
 
 def _title_variants(name: str) -> list[str]:
     variants = [name, *TITLE_ALIASES.get(name, [])]
-    core_name = _title_core(name)
-    if core_name != name.casefold().strip():
-        variants.append(core_name)
-    base_name = name.split(" [", 1)[0].split(" (", 1)[0].strip()
-    if base_name and base_name != name:
-        variants.append(base_name)
-    hyphen_name = name.split(" - ", 1)[0].strip()
-    if hyphen_name and hyphen_name != name:
-        variants.append(hyphen_name)
     return list(dict.fromkeys(variants))
 
 
@@ -306,7 +298,9 @@ def search_track(
             invalid_terms = item_versions & INVALID_RELEASE_TERMS
             if invalid_terms:
                 reasons.append("invalid release: " + ", ".join(sorted(invalid_terms)))
-            if (source_versions & HARD_VERSION_TERMS) != (item_versions & HARD_VERSION_TERMS):
+            source_hard_versions = source_versions & HARD_VERSION_TERMS
+            candidate_hard_versions = item_versions & HARD_VERSION_TERMS
+            if source_hard_versions != candidate_hard_versions:
                 reasons.append("version mismatch")
 
             album_points = _album_score(album, item_album_name)
@@ -336,7 +330,9 @@ def search_track(
         return None
 
     score, item = max(candidates.values(), key=lambda value: value[0])
-    item_artists = ", ".join(value.get("name", "") for value in item.get("artists", []))
+    item_artists = ", ".join(
+        value.get("name", "") for value in item.get("artists", [])
+    )
     album_points = _album_score(album, item.get("album", {}).get("name", ""))
     print(
         f"Matched candidate: {item.get('name', '')} - {item_artists} - "
