@@ -143,6 +143,9 @@ ARTIST_ALIASES = {
     "清塚信也": ["Shinya Kiyozuka"],
     "NAOTO": ["Naoto"],
     "CAGNET": ["Cagnet"],
+    "藤井風": ["Fujii Kaze"],
+    "吉田美奈子": ["Minako Yoshida"],
+    "ブレッド&バター": ["Bread And Butter"],
 }
 
 TITLE_ALIASES = {
@@ -157,7 +160,10 @@ TITLE_ALIASES = {
 VERSION_TERMS = {
     "remix", "remixed", "live", "acoustic", "edit", "radioedit",
     "version", "remaster", "remastered", "demo", "instrumental",
+    "tribute", "cover", "karaoke",
 }
+HARD_VERSION_TERMS = {"live", "remix", "acoustic", "instrumental", "demo", "radioedit"}
+INVALID_RELEASE_TERMS = {"tribute", "cover", "karaoke"}
 
 
 def _title_core(value: str) -> str:
@@ -189,38 +195,60 @@ def _version_terms(value: str) -> set[str]:
     return {term for term in VERSION_TERMS if term in normalized}
 
 
+def _artist_matches(
+    source_artists: list[str],
+    spotify_artists: list[dict],
+) -> tuple[bool, int]:
+    source_names = {
+        _normalize_text(value)
+        for artist in source_artists
+        for value in [artist, *ARTIST_ALIASES.get(artist, [])]
+        if value
+    }
+    spotify_names = {
+        _normalize_text(artist.get("name", ""))
+        for artist in spotify_artists
+        if artist.get("name")
+    }
+    matches = source_names & spotify_names
+    return bool(matches), len(matches)
+
+
+def _album_score(source_album: str, spotify_album: str) -> int:
+    if not source_album or not spotify_album:
+        return 0
+    source = _normalize_text(source_album)
+    candidate = _normalize_text(spotify_album)
+    if source == candidate:
+        return 60
+    if source in candidate or candidate in source:
+        return 45
+    return 15
+
+
 def search_track(
     access_token: str,
     name: str,
     artists: list[str],
     album: str = "",
 ) -> str | None:
-    """Search with bounded queries, then validate candidates locally."""
+    """Find the most reliable candidate using bounded Spotify searches."""
     if not name or not artists:
         print(f"Not found: {name} - missing artist metadata")
         return None
 
-    artist_queries = [
-        value
-        for value in [artists[0], *ARTIST_ALIASES.get(artists[0], [])]
-        if value
-    ]
-    normalized_artists = {_normalize_text(value) for value in artist_queries}
-    normalized_titles = {
-        _normalize_text(value) for value in _title_variants(name)
-    }
-    source_versions = _version_terms(name)
-    source_album = _normalize_text(album)
     queries = [
-        (f'track:"{name}" artist:"{artists[0]}"'
-         + (f' album:"{album}"' if album else "")),
+        f'track:"{name}" artist:"{artists[0]}"'
+        + (f' album:"{album}"' if album else ""),
         f"{name} {artists[0]}".strip(),
     ]
-    requests_sent = 0
+    normalized_titles = {_normalize_text(value) for value in _title_variants(name)}
+    source_versions = _version_terms(name) | _version_terms(album)
     candidates = {}
+    requests_sent = 0
 
-    for query_index, query in enumerate(queries):
-        print(f"Spotify search query {query_index + 1}/2: {query}")
+    for query_index, query in enumerate(queries, start=1):
+        print(f"Spotify search query {query_index}/2: {query}")
         requests_sent += 1
         response = _spotify_get(
             f"{SPOTIFY_API_URL}/search",
@@ -235,36 +263,37 @@ def search_track(
         print(f"Search result: {len(items)} candidates")
         for item in items:
             item_name = item.get("name", "")
-            item_artists = {
-                _normalize_text(value.get("name", ""))
-                for value in item.get("artists", [])
-            }
+            item_artists = item.get("artists", [])
             item_album_name = item.get("album", {}).get("name", "")
-            item_album = _normalize_text(item_album_name)
+            item_versions = _version_terms(item_name) | _version_terms(item_album_name)
             reasons = []
+
             if _normalize_text(item_name) not in normalized_titles:
                 reasons.append("title mismatch")
-            artist_matches = normalized_artists & item_artists
-            if not artist_matches:
+
+            artist_ok, artist_count = _artist_matches(artists, item_artists)
+            if not artist_ok:
                 reasons.append("artist mismatch")
-            item_versions = (
-                _version_terms(item_name) | _version_terms(item_album_name)
-            )
-            if source_versions != item_versions and source_versions != source_versions & item_versions:
+
+            invalid_terms = item_versions & INVALID_RELEASE_TERMS
+            if invalid_terms:
+                reasons.append("invalid release: " + ", ".join(sorted(invalid_terms)))
+
+            source_hard_versions = source_versions & HARD_VERSION_TERMS
+            candidate_hard_versions = item_versions & HARD_VERSION_TERMS
+            if source_hard_versions != candidate_hard_versions:
                 reasons.append("version mismatch")
-            album_match = bool(source_album and (
-                source_album in item_album or item_album in source_album
-            ))
-            if source_album and not album_match:
-                reasons.append("album mismatch")
+
+            album_points = _album_score(album, item_album_name)
             if reasons:
                 print(
                     f"Rejected candidate: {item_name} - "
-                    f"{', '.join(value.get('name', '') for value in item.get('artists', []))} "
-                    f"- {item_album_name} ({', '.join(reasons)})"
+                    f"{', '.join(value.get('name', '') for value in item_artists)} - "
+                    f"{item_album_name} ({', '.join(reasons)})"
                 )
                 continue
-            score = 100 * len(artist_matches) + 60 * int(album_match) + 40
+
+            score = 200 * artist_count + 40 + album_points
             item_id = item.get("id")
             if item_id:
                 candidates[item_id] = max(
@@ -282,12 +311,17 @@ def search_track(
         return None
 
     score, item = max(candidates.values(), key=lambda value: value[0])
+    item_artists = ", ".join(
+        value.get("name", "") for value in item.get("artists", [])
+    )
     print(
-        f"Matched candidate: {item.get('name', '')} - "
-        f"{', '.join(value.get('name', '') for value in item.get('artists', []))} - "
+        f"Matched candidate: {item.get('name', '')} - {item_artists} - "
         f"{item.get('album', {}).get('name', '')}; "
         f"Match reason: title + artist"
-        + (" + album" if score >= 200 else "")
+        + (" + album" if _album_score(
+            album, item.get("album", {}).get("name", "")
+        ) >= 45 else "")
+        + f"; score={score}"
     )
     return item.get("id")
 
