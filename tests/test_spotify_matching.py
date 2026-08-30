@@ -148,3 +148,22 @@ def test_title_core_accepts_safe_metadata_variants():
         "Romeo And Juliet",
         "Romeo And Juliet - Live Version",
     )
+
+
+def test_additional_safe_metadata_and_artist_aliases(monkeypatch):
+    cases = [
+        ("FREE WAY 5 TO SOUTH", ["芳野藤丸"], "FREE WAY 5 TO SOUTH - 2022 Remaster", "Album", "芳野藤丸"),
+        ("Amaze Amaze Amaze (Life on Erid)", ["Daniel Pemberton"], 'Amaze Amaze Amaze (Life on Erid) - from "Project Hail Mary"', "Project Hail Mary", "Daniel Pemberton"),
+        ("From Me", ["Artist"], "Frome Me", "Album", "Artist"),
+        ("Theme", ["林ゆうき"], "Theme", "Album", "Yuki Hayashi"),
+        ("Theme", ["宇多田ヒカル"], "Theme", "Album", "Hikaru Utada"),
+        ("Theme", ["ラ・ムー"], "Theme", "Album", "RA MU"),
+    ]
+    for source_title, artists, candidate_title, album, spotify_artist in cases:
+        assert run_search(monkeypatch, source_title, artists, album, [track("candidate", candidate_title, [spotify_artist], album)]) == "candidate"
+
+
+def test_all_explicit_recording_conflicts_are_rejected(monkeypatch):
+    for marker in ["Live Version", "Remix", "Acoustic", "Instrumental", "Demo", "Radio Edit", "Extended Mix", "DJ Version", "Tribute", "Cover", "Karaoke"]:
+        result = run_search(monkeypatch, "Romeo And Juliet", ["Dire Straits"], "Brothers in Arms", [track("wrong", f"Romeo And Juliet - {marker}", ["Dire Straits"], "Brothers in Arms")])
+        assert result is None
