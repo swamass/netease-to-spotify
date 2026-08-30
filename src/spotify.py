@@ -242,7 +242,10 @@ def search_track(
         + (f' album:"{album}"' if album else ""),
         f"{name} {artists[0]}".strip(),
     ]
-    normalized_titles = {_normalize_text(value) for value in _title_variants(name)}
+    normalized_titles = {
+        _normalize_text(_title_core(value))
+        for value in _title_variants(name)
+    }
     source_versions = _version_terms(name) | _version_terms(album)
     candidates = {}
     requests_sent = 0
@@ -268,7 +271,7 @@ def search_track(
             item_versions = _version_terms(item_name) | _version_terms(item_album_name)
             reasons = []
 
-            if _normalize_text(item_name) not in normalized_titles:
+            if _normalize_text(_title_core(item_name)) not in normalized_titles:
                 reasons.append("title mismatch")
 
             artist_ok, artist_count = _artist_matches(artists, item_artists)
