@@ -161,16 +161,24 @@ TITLE_ALIASES = {
     "Just My Imagination": ["Just My Imagination (Running Away with Me)"],
 }
 
-VERSION_TERMS = {
-    "remix", "remixed", "live", "acoustic", "edit", "radioedit",
-    "version", "remaster", "remastered", "demo", "instrumental",
-    "extendedmix", "djversion", "tribute", "cover", "karaoke",
+SAFE_VERSION_TERMS = {
+    "remaster", "remastered", "reissue", "rerelease", "deluxeedition",
+    "expandededition", "anniversaryedition", "specialedition",
 }
 HARD_VERSION_TERMS = {
-    "live", "remix", "acoustic", "instrumental", "demo", "radioedit",
-    "extendedmix", "djversion",
+    "live", "remix", "remixed", "acoustic", "instrumental", "demo",
+    "radioedit", "extendedmix", "djversion",
 }
 INVALID_RELEASE_TERMS = {"tribute", "cover", "karaoke"}
+
+
+def _version_terms(value: str) -> set[str]:
+    normalized = _normalize_text(value)
+    terms = set()
+    for term in SAFE_VERSION_TERMS | HARD_VERSION_TERMS | INVALID_RELEASE_TERMS:
+        if term in normalized:
+            terms.add(term)
+    return terms
 
 
 def _title_core(value: str) -> str:
@@ -181,62 +189,63 @@ def _title_core(value: str) -> str:
         normalized,
     )
     normalized = re.sub(
-        r"\s*-\s*from\s+[\"“”][^\"“”]+[\"“”]\s*$",
+        r'\s*-\s*from\s+["“”][^"“”]+["“”]\s*$',
         "",
         normalized,
     )
     normalized = re.sub(
-        r"\s*-\s*(?:(?:\d{4}\s+)?remaster(?:ed)?)\s*$",
+        r"\s*-\s*(?:\d{4}\s+)?remaster(?:ed)?\s*$",
         "",
         normalized,
-        flags=re.IGNORECASE,
     )
     normalized = re.sub(
-        r"\s*\((?:(?:\d{4}\s+)?remaster(?:ed)?|version)\)\s*$",
+        r"\s*\((?:\d{4}\s+)?remaster(?:ed)?\)\s*$",
         "",
         normalized,
-        flags=re.IGNORECASE,
     )
     return normalized.strip()
 
 
-def _title_match(source: str, candidate: str) -> bool:
-    source_key = _normalize_text(_title_core(source))
-    candidate_core = _title_core(candidate)
-    candidate_keys = [_normalize_text(candidate_core)]
-    subtitle_stripped = re.sub(r"\s*\([^)]*\)\s*$", "", candidate_core)
-    if subtitle_stripped != candidate_core:
-        candidate_keys.append(_normalize_text(subtitle_stripped))
+def _title_keys(value: str) -> set[str]:
+    core = _title_core(value)
+    keys = {_normalize_text(core)}
+    subtitle_removed = re.sub(r"\s*\([^)]*\)\s*$", "", core).strip()
+    if subtitle_removed != core:
+        keys.add(_normalize_text(subtitle_removed))
+    return {key for key in keys if key}
 
-    for candidate_key in candidate_keys:
-        if source_key == candidate_key:
-            return True
-        ratio = difflib.SequenceMatcher(None, source_key, candidate_key).ratio()
-        if ratio >= 0.92 and abs(len(source_key) - len(candidate_key)) <= 3:
-            return True
+
+def _title_match(source: str, candidate: str) -> bool:
+    source_keys = set()
+    for variant in _title_variants(source):
+        source_keys.update(_title_keys(variant))
+    candidate_keys = _title_keys(candidate)
+    for source_key in source_keys:
+        for candidate_key in candidate_keys:
+            if source_key == candidate_key:
+                return True
+            distance = abs(len(source_key) - len(candidate_key))
+            ratio = difflib.SequenceMatcher(None, source_key, candidate_key).ratio()
+            if distance <= 3 and ratio >= 0.92:
+                return True
     return False
 
 
 def _title_variants(name: str) -> list[str]:
-    variants = [name, *TITLE_ALIASES.get(name, [])]
-    return list(dict.fromkeys(variants))
-
-
-def _version_terms(value: str) -> set[str]:
-    normalized = _normalize_text(value)
-    return {term for term in VERSION_TERMS if term in normalized}
+    return list(dict.fromkeys([name, *TITLE_ALIASES.get(name, [])]))
 
 
 def _artist_matches(
     source_artists: list[str],
     spotify_artists: list[dict],
 ) -> tuple[bool, int]:
-    source_names = {
-        _normalize_text(value)
-        for artist in source_artists
-        for value in [artist, *ARTIST_ALIASES.get(artist, [])]
-        if value
-    }
+    source_names = set()
+    for source_artist in source_artists:
+        source_names.add(_normalize_text(source_artist))
+        source_names.update(
+            _normalize_text(alias)
+            for alias in ARTIST_ALIASES.get(source_artist, [])
+        )
     spotify_names = {
         _normalize_text(artist.get("name", ""))
         for artist in spotify_artists
@@ -255,7 +264,29 @@ def _album_score(source_album: str, spotify_album: str) -> int:
         return 60
     if source in candidate or candidate in source:
         return 45
-    return 15
+    source_words = set(re.findall(r"[a-z0-9]+", source))
+    candidate_words = set(re.findall(r"[a-z0-9]+", candidate))
+    overlap = len(source_words & candidate_words)
+    if overlap:
+        return 30
+    return 10
+
+
+def _release_has_invalid_terms(name: str, album: str) -> bool:
+    return bool(_version_terms(name) | _version_terms(album) & INVALID_RELEASE_TERMS)
+
+
+def _version_conflicts(source_name: str, source_album: str,
+                       candidate_name: str, candidate_album: str) -> list[str]:
+    source_terms = _version_terms(source_name) | _version_terms(source_album)
+    candidate_terms = _version_terms(candidate_name) | _version_terms(candidate_album)
+    reasons = []
+    if candidate_terms & INVALID_RELEASE_TERMS:
+        reasons.append("tribute/cover/karaoke release")
+    for term in HARD_VERSION_TERMS:
+        if (term in source_terms) != (term in candidate_terms):
+            reasons.append(f"{term} version mismatch")
+    return reasons
 
 
 def search_track(
@@ -275,7 +306,6 @@ def search_track(
         + (f' album:"{album}"' if album else ""),
         f"{name} {artist}".strip(),
     ]
-    source_versions = _version_terms(name) | _version_terms(album)
     candidates = {}
     requests_sent = 0
 
@@ -294,42 +324,38 @@ def search_track(
         items = response.json().get("tracks", {}).get("items", [])
         print(f"Search result: {len(items)} candidates")
         for item in items:
+            item_id = item.get("id")
             item_name = item.get("name", "")
             item_artists = item.get("artists", [])
             item_album_name = item.get("album", {}).get("name", "")
-            item_versions = _version_terms(item_name) | _version_terms(item_album_name)
             reasons = []
 
+            if not item_id:
+                reasons.append("missing track ID")
             if not _title_match(name, item_name):
                 reasons.append("title mismatch")
             artist_ok, artist_count = _artist_matches(artists, item_artists)
             if not artist_ok:
                 reasons.append("artist mismatch")
-            invalid_terms = item_versions & INVALID_RELEASE_TERMS
-            if invalid_terms:
-                reasons.append("invalid release: " + ", ".join(sorted(invalid_terms)))
-            source_hard_versions = source_versions & HARD_VERSION_TERMS
-            candidate_hard_versions = item_versions & HARD_VERSION_TERMS
-            if source_hard_versions != candidate_hard_versions:
-                reasons.append("version mismatch")
+            reasons.extend(_version_conflicts(
+                name, album, item_name, item_album_name
+            ))
 
-            album_points = _album_score(album, item_album_name)
             if reasons:
                 print(
                     f"Rejected candidate: {item_name} - "
                     f"{', '.join(value.get('name', '') for value in item_artists)} - "
-                    f"{item_album_name} ({', '.join(reasons)})"
+                    f"{item_album_name} ({', '.join(dict.fromkeys(reasons))})"
                 )
                 continue
 
-            score = 300 * artist_count + 100 + album_points
-            item_id = item.get("id")
-            if item_id:
-                candidates[item_id] = max(
-                    candidates.get(item_id, (0, item)),
-                    (score, item),
-                    key=lambda value: value[0],
-                )
+            album_points = _album_score(album, item_album_name)
+            score = 400 * artist_count + 150 + album_points
+            candidates[item_id] = max(
+                candidates.get(item_id, (0, item)),
+                (score, item),
+                key=lambda value: value[0],
+            )
 
         if candidates:
             break
@@ -347,7 +373,7 @@ def search_track(
     print(
         f"Matched candidate: {item.get('name', '')} - {item_artists} - "
         f"{item.get('album', {}).get('name', '')}; "
-        f"Match reason: title + artist"
+        f"Match reason: artist + title"
         + (" + album" if album_points >= 45 else "")
         + f"; score={score}"
     )
