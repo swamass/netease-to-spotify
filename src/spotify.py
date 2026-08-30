@@ -202,11 +202,19 @@ def _title_core(value: str) -> str:
 
 def _title_match(source: str, candidate: str) -> bool:
     source_key = _normalize_text(_title_core(source))
-    candidate_key = _normalize_text(_title_core(candidate))
-    if source_key == candidate_key:
-        return True
-    ratio = difflib.SequenceMatcher(None, source_key, candidate_key).ratio()
-    return ratio >= 0.92 and abs(len(source_key) - len(candidate_key)) <= 3
+    candidate_core = _title_core(candidate)
+    candidate_keys = [_normalize_text(candidate_core)]
+    subtitle_stripped = re.sub(r"\s*\([^)]*\)\s*$", "", candidate_core)
+    if subtitle_stripped != candidate_core:
+        candidate_keys.append(_normalize_text(subtitle_stripped))
+
+    for candidate_key in candidate_keys:
+        if source_key == candidate_key:
+            return True
+        ratio = difflib.SequenceMatcher(None, source_key, candidate_key).ratio()
+        if ratio >= 0.92 and abs(len(source_key) - len(candidate_key)) <= 3:
+            return True
+    return False
 
 
 def _title_variants(name: str) -> list[str]:
