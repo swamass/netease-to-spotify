@@ -150,6 +150,7 @@ ARTIST_ALIASES = {
     "林ゆうき": ["Yuki Hayashi"],
     "宇多田ヒカル": ["Hikaru Utada"],
     "ラ・ムー": ["RA MU"],
+    "村田和人": ["Kazuhito Murata"],
 }
 
 TITLE_ALIASES = {
