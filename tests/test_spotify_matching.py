@@ -129,3 +129,22 @@ def test_rejects_invalid_and_conflicting_versions(monkeypatch):
             assert result is None
         else:
             assert result is None if source_version else result == "candidate"
+
+
+def test_title_core_accepts_safe_metadata_variants():
+    assert spotify._title_match(
+        "FREE WAY 5 TO SOUTH",
+        "FREE WAY 5 TO SOUTH - 2022 Remaster",
+    )
+    assert spotify._title_match(
+        "As You Walked Away From Me",
+        "As You Walked Away Frome Me (You Are Free)",
+    )
+    assert spotify._title_match(
+        "Amaze Amaze Amaze (Life on Erid)",
+        'Amaze Amaze Amaze (Life on Erid) - from "Project Hail Mary"',
+    )
+    assert not spotify._title_match(
+        "Romeo And Juliet",
+        "Romeo And Juliet - Live Version",
+    )
