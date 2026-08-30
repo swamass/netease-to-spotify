@@ -181,6 +181,17 @@ def _title_core(value: str) -> str:
         r"\\s*-\\s*(?:from\\s+)?[\\\"“”][^\\\"“”]+[\\\"“”]$",
         "",
         normalized,
+    )
+    normalized = re.sub(
+        r"\\s*-\\s*\\d{4}\\s+(?:remaster(?:ed)?|version)$",
+        "",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    normalized = re.sub(
+        r"\\s*\\((?:remaster(?:ed)?|\\d{4}\\s+remaster(?:ed)?|version)\\)$",
+        "",
+        normalized,
         flags=re.IGNORECASE,
     )
     return normalized.strip()
