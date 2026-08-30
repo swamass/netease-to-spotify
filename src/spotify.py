@@ -1,4 +1,5 @@
 import base64
+import difflib
 import re
 import time
 import unicodedata
@@ -146,6 +147,9 @@ ARTIST_ALIASES = {
     "藤井風": ["Fujii Kaze"],
     "吉田美奈子": ["Minako Yoshida"],
     "ブレッド&バター": ["Bread And Butter"],
+    "林ゆうき": ["Yuki Hayashi"],
+    "宇多田ヒカル": ["Hikaru Utada"],
+    "ラ・ムー": ["RA MU"],
 }
 
 TITLE_ALIASES = {
@@ -169,11 +173,26 @@ INVALID_RELEASE_TERMS = {"tribute", "cover", "karaoke"}
 def _title_core(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value).casefold()
     normalized = re.sub(
-        r"\s*\((?:with|feat\.?|featuring)\b[^)]*\)",
+        r"\\s*\\((?:with|feat\\.?|featuring)\\b[^)]*\\)",
         "",
         normalized,
     )
+    normalized = re.sub(
+        r"\\s*-\\s*(?:from\\s+)?[\\\"“”][^\\\"“”]+[\\\"“”]$",
+        "",
+        normalized,
+        flags=re.IGNORECASE,
+    )
     return normalized.strip()
+
+
+def _title_match(source: str, candidate: str) -> bool:
+    source_key = _normalize_text(_title_core(source))
+    candidate_key = _normalize_text(_title_core(candidate))
+    if source_key == candidate_key:
+        return True
+    ratio = difflib.SequenceMatcher(None, source_key, candidate_key).ratio()
+    return ratio >= 0.92 and abs(len(source_key) - len(candidate_key)) <= 3
 
 
 def _title_variants(name: str) -> list[str]:
@@ -232,20 +251,17 @@ def search_track(
     artists: list[str],
     album: str = "",
 ) -> str | None:
-    """Find the most reliable candidate using bounded Spotify searches."""
+    """Find the most reliable candidate using two bounded searches."""
     if not name or not artists:
         print(f"Not found: {name} - missing artist metadata")
         return None
 
+    artist = artists[0]
     queries = [
-        f'track:"{name}" artist:"{artists[0]}"'
+        f'track:"{name}" artist:"{artist}"'
         + (f' album:"{album}"' if album else ""),
-        f"{name} {artists[0]}".strip(),
+        f"{name} {artist}".strip(),
     ]
-    normalized_titles = {
-        _normalize_text(_title_core(value))
-        for value in _title_variants(name)
-    }
     source_versions = _version_terms(name) | _version_terms(album)
     candidates = {}
     requests_sent = 0
@@ -271,20 +287,15 @@ def search_track(
             item_versions = _version_terms(item_name) | _version_terms(item_album_name)
             reasons = []
 
-            if _normalize_text(_title_core(item_name)) not in normalized_titles:
+            if not _title_match(name, item_name):
                 reasons.append("title mismatch")
-
             artist_ok, artist_count = _artist_matches(artists, item_artists)
             if not artist_ok:
                 reasons.append("artist mismatch")
-
             invalid_terms = item_versions & INVALID_RELEASE_TERMS
             if invalid_terms:
                 reasons.append("invalid release: " + ", ".join(sorted(invalid_terms)))
-
-            source_hard_versions = source_versions & HARD_VERSION_TERMS
-            candidate_hard_versions = item_versions & HARD_VERSION_TERMS
-            if source_hard_versions != candidate_hard_versions:
+            if (source_versions & HARD_VERSION_TERMS) != (item_versions & HARD_VERSION_TERMS):
                 reasons.append("version mismatch")
 
             album_points = _album_score(album, item_album_name)
@@ -296,7 +307,7 @@ def search_track(
                 )
                 continue
 
-            score = 200 * artist_count + 40 + album_points
+            score = 300 * artist_count + 100 + album_points
             item_id = item.get("id")
             if item_id:
                 candidates[item_id] = max(
@@ -314,16 +325,13 @@ def search_track(
         return None
 
     score, item = max(candidates.values(), key=lambda value: value[0])
-    item_artists = ", ".join(
-        value.get("name", "") for value in item.get("artists", [])
-    )
+    item_artists = ", ".join(value.get("name", "") for value in item.get("artists", []))
+    album_points = _album_score(album, item.get("album", {}).get("name", ""))
     print(
         f"Matched candidate: {item.get('name', '')} - {item_artists} - "
         f"{item.get('album', {}).get('name', '')}; "
         f"Match reason: title + artist"
-        + (" + album" if _album_score(
-            album, item.get("album", {}).get("name", "")
-        ) >= 45 else "")
+        + (" + album" if album_points >= 45 else "")
         + f"; score={score}"
     )
     return item.get("id")
