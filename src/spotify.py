@@ -536,12 +536,7 @@ def add_tracks_to_playlist(
 
         print(
             f"Successfully added {len(batch)} tracks."
-        )
-,
-        "",
-        normalized,
-    )
-    normalized = re.sub(
+        )    normalized = re.sub(
         r'\s*-\s*from\s+["“”][^"“”]+["“”]\s*
     normalized = re.sub(
         r"\s*-\s*(?:\d{4}\s+)?remaster(?:ed)?\s*$",
