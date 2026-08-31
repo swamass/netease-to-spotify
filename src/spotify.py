@@ -236,10 +236,21 @@ def _title_variants(name: str) -> list[str]:
     return list(dict.fromkeys([name, *TITLE_ALIASES.get(name, [])]))
 
 
-def _artist_matches(
+def _contains_cjk(value: str) -> bool:
+    return any("\u4e00" <= character <= "\u9fff" for character in value)
+
+
+def _contains_kana(value: str) -> bool:
+    return any(
+        "\u3040" <= character <= "\u30ff"
+        for character in value
+    )
+
+
+def _artist_match_score(
     source_artists: list[str],
     spotify_artists: list[dict],
-) -> tuple[bool, int]:
+) -> tuple[float, int, bool]:
     source_names = set()
     for source_artist in source_artists:
         source_names.add(_normalize_text(source_artist))
@@ -247,13 +258,49 @@ def _artist_matches(
             _normalize_text(alias)
             for alias in ARTIST_ALIASES.get(source_artist, [])
         )
-    spotify_names = {
-        _normalize_text(artist.get("name", ""))
+
+    spotify_values = [
+        artist.get("name", "")
         for artist in spotify_artists
         if artist.get("name")
-    }
-    matches = source_names & spotify_names
-    return bool(matches), len(matches)
+    ]
+    spotify_names = {_normalize_text(value) for value in spotify_values}
+    exact_matches = source_names & spotify_names
+    if exact_matches:
+        return 1.0, len(exact_matches), True
+
+    for source_artist in source_artists:
+        source_key = _normalize_text(source_artist)
+        for spotify_name in spotify_names:
+            if source_key and (
+                source_key in spotify_name or spotify_name in source_key
+            ):
+                return 0.8, 1, True
+
+    source_has_asian = any(
+        _contains_cjk(value) or _contains_kana(value)
+        for value in source_artists
+    )
+    spotify_has_asian = any(
+        _contains_cjk(value) or _contains_kana(value)
+        for value in spotify_values
+    )
+    if source_has_asian != spotify_has_asian or (
+        source_has_asian and spotify_has_asian
+    ):
+        return 0.35, 0, False
+
+    return 0.0, 0, False
+
+
+def _artist_matches(
+    source_artists: list[str],
+    spotify_artists: list[dict],
+) -> tuple[bool, int]:
+    score, count, reliable = _artist_match_score(
+        source_artists, spotify_artists
+    )
+    return score > 0, count
 
 
 def _album_score(source_album: str, spotify_album: str) -> int:
@@ -335,9 +382,17 @@ def search_track(
                 reasons.append("missing track ID")
             if not _title_match(name, item_name):
                 reasons.append("title mismatch")
-            artist_ok, artist_count = _artist_matches(artists, item_artists)
-            if not artist_ok:
+            artist_score, artist_count, artist_reliable = _artist_match_score(
+                artists, item_artists
+            )
+            album_points = _album_score(album, item_album_name)
+            title_exact = _normalize_text(_title_core(name)) in _title_keys(item_name)
+            if artist_score == 0:
                 reasons.append("artist mismatch")
+            elif not artist_reliable and not (
+                title_exact and album_points >= 45
+            ):
+                reasons.append("artist not sufficiently corroborated")
             reasons.extend(_version_conflicts(
                 name, album, item_name, item_album_name
             ))
@@ -350,8 +405,11 @@ def search_track(
                 )
                 continue
 
-            album_points = _album_score(album, item_album_name)
-            score = 400 * artist_count + 150 + album_points
+            score = (
+                500 * artist_score
+                + 300 * (1 if title_exact else 0.92)
+                + album_points
+            )
             candidates[item_id] = max(
                 candidates.get(item_id, (0, item)),
                 (score, item),
