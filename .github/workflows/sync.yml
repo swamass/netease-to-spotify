@@ -1,4 +1,5 @@
 name: Sync NetEase Daily Recommendations
+# Scheduled workflow kept on the default branch for daily execution.
 
 on:
   workflow_dispatch:
