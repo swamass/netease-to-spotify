@@ -212,3 +212,29 @@ def test_same_title_with_clearly_different_artist_is_rejected(monkeypatch):
         [track("wrong", "晴天", ["Other Artist"], "Other Album")],
     )
     assert result is None
+
+
+def test_candidate_scoring_prefers_exact_artist_and_album(monkeypatch):
+    candidates = [
+        track("wrong-artist", "Home", ["Artist B"], "Album"),
+        track("right", "Home", ["Artist A"], "Album"),
+        track("right-other-album", "Home", ["Artist A"], "Compilation"),
+    ]
+    assert run_search(monkeypatch, "Home", ["Artist A"], "Album", candidates) == "right"
+
+
+def test_duration_is_supporting_evidence_not_a_hard_reject(monkeypatch):
+    candidate = track("duration", "Song", ["Artist"], "Album")
+    candidate["duration_ms"] = 223000
+    monkeypatch.setattr(spotify, "_spotify_get", lambda *_args, **_kwargs: FakeResponse([candidate]))
+    assert spotify.search_track("test-token", "Song", ["Artist"], "Album", duration_ms=220000) == "duration"
+
+
+def test_search_stays_bounded_at_two_queries(monkeypatch):
+    calls = []
+    def fake_get(*_args, **kwargs):
+        calls.append(kwargs.get("params", {}).get("q"))
+        return FakeResponse([])
+    monkeypatch.setattr(spotify, "_spotify_get", fake_get)
+    assert spotify.search_track("test-token", "Missing", ["Artist"], "Album") is None
+    assert len(calls) <= 2
