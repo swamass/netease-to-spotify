@@ -1,0 +1,40 @@
+name: NetEase Spotify Match Dry Run
+
+on:
+  workflow_dispatch:
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Run read-only matching
+        env:
+          PYTHONPATH: .
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+          SPOTIFY_PLAYLIST_ID: ${{ secrets.SPOTIFY_PLAYLIST_ID }}
+          NETEASE_COOKIE: ${{ secrets.NETEASE_COOKIE }}
+          NETEASE_CSRF_TOKEN: ${{ secrets.NETEASE_CSRF_TOKEN }}
+        run: python -m src.dry_run | tee match-dry-run.log
+
+      - name: Upload dry-run report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: match-dry-run-report
+          path: |
+            match-dry-run.log
+            match_report.json
+          if-no-files-found: ignore
