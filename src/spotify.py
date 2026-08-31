@@ -303,6 +303,21 @@ def _artist_matches(
     return score > 0, count
 
 
+def _duration_score(source_duration_ms: int | None, spotify_duration_ms: int | None) -> int:
+    if not source_duration_ms or not spotify_duration_ms:
+        return 0
+    difference = abs(source_duration_ms - spotify_duration_ms)
+    if difference <= 3000:
+        return 50
+    if difference <= 8000:
+        return 40
+    if difference <= 15000:
+        return 25
+    if difference <= 30000:
+        return 10
+    return 0
+
+
 def _album_score(source_album: str, spotify_album: str) -> int:
     if not source_album or not spotify_album:
         return 0
@@ -342,6 +357,7 @@ def search_track(
     name: str,
     artists: list[str],
     album: str = "",
+    duration_ms: int | None = None,
 ) -> str | None:
     """Find the most reliable candidate using two bounded searches."""
     if not name or not artists:
@@ -386,6 +402,9 @@ def search_track(
                 artists, item_artists
             )
             album_points = _album_score(album, item_album_name)
+            duration_points = _duration_score(
+                duration_ms, item.get("duration_ms")
+            )
             title_exact = _normalize_text(_title_core(name)) in _title_keys(item_name)
             if artist_score == 0:
                 reasons.append("artist mismatch")
@@ -405,10 +424,20 @@ def search_track(
                 )
                 continue
 
+            title_points = 300 if title_exact else 276
+            version_points = 100
             score = (
-                500 * artist_score
-                + 300 * (1 if title_exact else 0.92)
+                title_points
+                + 500 * artist_score
                 + album_points
+                + duration_points
+                + version_points
+            )
+            print(
+                f"Candidate score: title={title_points}, "
+                f"artist={artist_score:.2f}, album={album_points}, "
+                f"duration={duration_points}, version={version_points}, "
+                f"total={score}"
             )
             candidates[item_id] = max(
                 candidates.get(item_id, (0, item)),
