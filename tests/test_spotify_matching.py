@@ -238,3 +238,42 @@ def test_search_stays_bounded_at_two_queries(monkeypatch):
     monkeypatch.setattr(spotify, "_spotify_get", fake_get)
     assert spotify.search_track("test-token", "Missing", ["Artist"], "Album") is None
     assert len(calls) <= 2
+
+
+def test_real_dry_run_artist_and_ost_variants(monkeypatch):
+    cases = [
+        ("中原めいこ", "Meiko Nakahara", "Track", "Album"),
+        ("松下誠", "Makoto Matsushita", "September Rain", "Album"),
+        ("Belle & Sebastian", "Belle and Sebastian", "Track", "Album"),
+    ]
+    for source_artist, spotify_artist, title, album in cases:
+        assert run_search(
+            monkeypatch,
+            title,
+            [source_artist],
+            album,
+            [track("match", title, [spotify_artist], album)],
+        ) == "match"
+
+
+def test_ost_bracket_attribution_is_ignored():
+    assert spotify._title_match(
+        "First Youth/Love Theme for Nata [From Cinema Paradiso]",
+        "First Youth/Love Theme For Nata",
+    )
+
+
+def test_english_and_japanese_versions_do_not_cross_match(monkeypatch):
+    result = run_search(
+        monkeypatch,
+        "September Rain (English Version)",
+        ["松下誠"],
+        "Album",
+        [track(
+            "japanese",
+            "September Rain - Japanese Version",
+            ["Makoto Matsushita"],
+            "Album",
+        )],
+    )
+    assert result is None
