@@ -185,3 +185,30 @@ def test_murata_song_accepts_remaster_from_different_album(monkeypatch):
         ],
     )
     assert result == "murata-2002-remaster"
+
+
+def test_multilingual_artist_mismatch_can_use_title_and_album(monkeypatch):
+    cases = [
+        ("夜に駆ける", ["YOASOBI中文名"], "ヨアソビ"),
+        ("Theme", ["中文艺人名"], "Romanized Artist"),
+        ("タイトル", ["日本語名"], "Romanized Artist"),
+    ]
+    for title, source_artists, spotify_artist in cases:
+        assert run_search(
+            monkeypatch,
+            title,
+            source_artists,
+            "Exact Album",
+            [track("multilingual", title, [spotify_artist], "Exact Album")],
+        ) == "multilingual"
+
+
+def test_same_title_with_clearly_different_artist_is_rejected(monkeypatch):
+    result = run_search(
+        monkeypatch,
+        "晴天",
+        ["周杰伦"],
+        "叶惠美",
+        [track("wrong", "晴天", ["Other Artist"], "Other Album")],
+    )
+    assert result is None
