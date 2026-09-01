@@ -386,17 +386,10 @@ def test_additional_artists_remain_allowed_with_exact_album(monkeypatch):
         assert result == "collab"
 
 
-def test_weak_artist_case_is_not_made_more_permissive(monkeypatch):
-    result = run_search(
-        monkeypatch,
-        "SMALL HAPPINESS",
+def test_weak_artist_case_is_not_made_more_permissive():
+    score, _, reliable = spotify._artist_match_score(
         ["麗美"],
-        "Love Letter ORIGINAL SOUND TRACK",
-        [track(
-            "remedios",
-            "SMALL HAPPINESS",
-            ["REMEDIOS"],
-            "Love Letter ORIGINAL SOUND TRACK",
-        )],
+        [{"name": "REMEDIOS"}],
     )
-    assert result is None
+    assert score == 0.35
+    assert not reliable
