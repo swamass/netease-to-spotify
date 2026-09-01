@@ -324,3 +324,79 @@ def test_search_scoring_uses_duration_to_prefer_closer_candidate(monkeypatch):
         "Album",
         [far, close],
     ) == "close"
+
+
+def test_fukuhara_artist_alias_matches():
+    score, count, reliable = spotify._artist_match_score(
+        ["福原美穂"],
+        [{"name": "Miho Fukuhara"}],
+    )
+    assert score == 1.0
+    assert reliable
+
+
+def test_fukuhara_song_matches_with_romanized_artist(monkeypatch):
+    result = run_search(
+        monkeypatch,
+        "絶え间なく",
+        ["福原美穂"],
+        "Album",
+        [track("fukuhara", "絶え間なく", ["Miho Fukuhara"], "Album")],
+    )
+    assert result == "fukuhara"
+
+
+def test_additional_artists_are_penalized_only_with_weak_album(monkeypatch):
+    candidates = [
+        track(
+            "solo",
+            "Deborah's Theme",
+            ["Ennio Morricone"],
+            "Once Upon a Time In America",
+        ),
+        track(
+            "ensemble",
+            "Deborah's Theme",
+            ["Ennio Morricone", "Jeroen van Veen", "Joachim Eijlander"],
+            "Film Music Volume 1",
+        ),
+    ]
+    result = run_search(
+        monkeypatch,
+        "Deborah's Theme",
+        ["Ennio Morricone"],
+        "Once Upon a Time In America",
+        candidates,
+    )
+    assert result == "solo"
+
+
+def test_additional_artists_remain_allowed_with_exact_album(monkeypatch):
+    for candidate_artists in [
+        ["KAROL G", "Bruno Mars"],
+        ["Revo Marty", "Alya Zurayya"],
+    ]:
+        result = run_search(
+            monkeypatch,
+            "Still",
+            [candidate_artists[0]],
+            "Exact Album",
+            [track("collab", "Still", candidate_artists, "Exact Album")],
+        )
+        assert result == "collab"
+
+
+def test_weak_artist_case_is_not_made_more_permissive(monkeypatch):
+    result = run_search(
+        monkeypatch,
+        "SMALL HAPPINESS",
+        ["麗美"],
+        "Love Letter ORIGINAL SOUND TRACK",
+        [track(
+            "remedios",
+            "SMALL HAPPINESS",
+            ["REMEDIOS"],
+            "Love Letter ORIGINAL SOUND TRACK",
+        )],
+    )
+    assert result is None
