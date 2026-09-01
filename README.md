@@ -1,146 +1,111 @@
-# NetEase Daily → Spotify
+# 网易云每日推荐 → Spotify
 
-Automatically sync NetEase Cloud Music daily recommendations to a dedicated Spotify playlist.
-
-## What it does
+每天获取网易云音乐每日推荐，通过 Spotify Search 和保守 matcher 匹配后刷新到指定 Spotify Playlist。项目由 GitHub Actions 自动运行，不需要自己长期运行服务器。
 
 ```
-NetEase Daily Recommendations
-        ↓
-Spotify Search
-        ↓
-Conservative matcher
-        ↓
-Spotify playlist refresh
+网易云音乐每日推荐 → Spotify Search → 保守匹配 → Spotify Playlist
 ```
 
-The matcher prioritizes precision over raw match rate. Title, artist, album, duration, and version metadata are evaluated together. Uncertain tracks may be skipped instead of forcing an incorrect match.
+## 功能
+- 每天自动同步网易云每日推荐。
+- 每首歌曲最多进行两次 Spotify Search。
+- 提供只读 Dry Run，正式同步前可检查结果。
+- 匹配不可靠、配置缺失或 Spotify 限流时保留原 Playlist。
 
-⚠️ Use a dedicated Spotify playlist. The formal sync replaces the configured playlist contents with the successfully matched tracks.
+## 匹配策略
+本项目优先保证匹配准确性，而不是追求 100% 匹配率。matcher 综合考虑歌曲标题、艺人、专辑、时长，以及 Live / Remix / Remaster 等版本信息。无法可靠确认时会跳过，而不是强制加入可能错误的版本。
 
-## Requirements
-
+## 使用前准备
 - Python 3.12+
-- A Spotify Developer application
-- A Spotify playlist you own or can modify
-- A logged-in NetEase Cloud Music session
-- GitHub Actions enabled for scheduled runs
+- 自己的 Spotify Developer App
+- 一个可修改的 Spotify Playlist
+- 已登录的网易云音乐账号
 
-## Quick Start
+## 快速开始
+### 1. Fork 仓库
+Fork 本仓库，然后 clone 你自己的副本。
 
-1. Fork this repository, then clone your fork.
-2. Create a Spotify Developer application at the Spotify Developer Dashboard.
-3. Add `http://127.0.0.1:8888/callback` as a redirect URI in that application.
-4. Run `python setup.py` locally to generate an authorization URL and obtain a refresh token.
-5. Obtain your own NetEase cookie from a logged-in NetEase Music browser session.
-6. Add the required values as GitHub Repository Secrets.
-7. Run **NetEase Spotify Match Dry Run** manually and review its report.
-8. Only after the dry run looks correct, run **Sync NetEase Daily Recommendations** manually or wait for its schedule.
+### 2. 创建 Spotify App
+创建自己的 Spotify Developer App，并添加 Redirect URI：
+```
+http://127.0.0.1:8888/callback
+```
 
-The setup helper never uploads credentials or writes them into tracked files.
-
-## Spotify setup
-
-Run:
-
+### 3. 运行 Setup
 ```bash
 python -m pip install -r requirements.txt
 python setup.py
 ```
+Setup 接收 Playlist URL / ID，生成 OAuth URL，验证 OAuth state 并获取 Refresh Token。不会保存凭据或自动上传 GitHub Secrets，Client Secret 会隐藏输入。
 
-The helper asks for your Spotify Client ID, Client Secret, and playlist URL or ID. It requests only the current required scope:
+### 4. 获取网易云 Cookie
+从自己登录的网易云音乐会话获取 Cookie。项目不提供自动登录、密码保存或 Cookie 抓取功能。Cookie 过期后需要重新获取。
 
-```
-playlist-modify-private
-```
+### 5. 配置 GitHub Secrets
+在 Repository → Settings → Secrets and variables → Actions 中添加：
 
-Paste the callback URL returned by Spotify when prompted. The helper validates the OAuth state before exchanging the code for a refresh token. It does not save or print the full client secret or refresh token.
-
-## Required GitHub Secrets
-
-| Secret | Purpose |
+| Secret | 用途 |
 | --- | --- |
-| `SPOTIFY_CLIENT_ID` | Spotify app Client ID |
-| `SPOTIFY_CLIENT_SECRET` | Spotify app Client Secret |
-| `SPOTIFY_REFRESH_TOKEN` | Spotify OAuth refresh token |
-| `SPOTIFY_PLAYLIST_ID` | Target Spotify playlist ID |
-| `NETEASE_COOKIE` | Authentication cookie from your own NetEase session |
+| `SPOTIFY_CLIENT_ID` | Spotify App Client ID |
+| `SPOTIFY_CLIENT_SECRET` | Spotify App Client Secret |
+| `SPOTIFY_REFRESH_TOKEN` | Spotify OAuth Refresh Token |
+| `SPOTIFY_PLAYLIST_ID` | 目标 Playlist |
+| `NETEASE_COOKIE` | 网易云登录 Cookie |
 
-Add them under **Repository → Settings → Secrets and variables → Actions**. Forked users must use their own Spotify and NetEase credentials.
+### 6. 先运行 Dry Run
+第一次使用建议手动运行 **NetEase Spotify Match Dry Run**。它会获取推荐、搜索 Spotify、执行 matcher 并输出统计，但不会清空、添加或修改 Playlist。
 
-## NetEase cookie
-
-The project does not automate NetEase login. Obtain the cookie from your own logged-in NetEase Music session and add it directly as the `NETEASE_COOKIE` repository secret. Do not commit it, paste it into issues, or include it in logs. Cookies can expire and may need to be replaced.
+### 7. 运行正式同步
+确认 Dry Run 后，手动运行 **Sync NetEase Daily Recommendations**，或等待定时运行。正式同步会替换目标 Playlist 内容，建议使用独立 Playlist。
 
 ## Dry Run
+Dry Run 是只读验证入口，会生成匹配日志和 `match_report.json` artifact，不会调用 Playlist 写入接口。
 
-Use the manual **NetEase Spotify Match Dry Run** workflow before formal syncing. It fetches the current recommendations, searches Spotify, applies the matcher, prints statistics, and uploads a report artifact.
-
-Dry Run does **not** clear the playlist and does **not** add tracks.
-
-## Daily Sync
-
-The formal workflow supports both manual execution and a daily schedule:
-
+## 每日自动同步
+正式 workflow 支持手动运行和定时运行：
 ```
 0 22 * * *
 ```
+GitHub Actions cron 使用 UTC，对应北京时间次日约 06:00；GitHub 调度可能有延迟。成功时会用当天匹配到的歌曲替换 Playlist；失败时保留原内容。
 
-GitHub Actions cron uses UTC, so this targets approximately 06:00 Beijing time on the following day. GitHub may introduce scheduling delays.
+## 匹配原则
+1. 用标题召回候选。
+2. 用艺人确认身份。
+3. 用专辑和时长辅助排序。
+4. 检查是否存在不同录音版本。
+5. 不确定就跳过。
 
-Before writing, the workflow completes matching. If no reliable tracks are found or Spotify rate limiting aborts the run, the existing playlist is preserved. On a successful run, the configured playlist is replaced with the matched daily tracks.
+## 已知限制
+- Spotify Search 不一定返回目标录音。
+- 不同地区版权限制可能导致歌曲不可用。
+- 网易云和 Spotify 的 metadata 写法可能不同。
+- 中文、日文、罗马字艺人或标题可能导致 unmatched。
+- Live、Remix、Remaster 等版本可能被主动拒绝。
+- Cookie 会过期；unmatched 不一定意味着程序出错。
 
-## Matching philosophy
+## 安全说明
+- 不要提交 `.env`、Spotify Client Secret、Refresh Token 或网易云 Cookie。
+- 使用 GitHub Secrets 保存运行时凭据。
+- 凭据意外公开后立即轮换。
+- 不要在日志中输出 Token、Secret、Cookie 或 OAuth code。
+- Fork 用户必须使用自己的凭据。
 
-- Artist identity has the highest importance.
-- Core title matching tolerates safe metadata such as remasters, collaborations, and OST attribution.
-- Album metadata helps rank candidates but is not an absolute requirement.
-- Duration is supporting evidence, not a hard requirement.
-- Live, Remix, Acoustic, Instrumental, Demo, Cover, Tribute, Karaoke, and similar conflicting versions can be rejected.
-- Search is bounded to at most two Spotify queries per NetEase song.
-- A low-confidence candidate is skipped rather than guessed.
+## 常见问题
+**Missing required environment variable**：检查五个 GitHub Secrets 是否都已创建且非空。
 
-## Known limitations
+**Spotify 401**：检查 Client ID、Client Secret、Refresh Token、Redirect URI 和 App 设置。
 
-- Spotify Search may not return the correct recording.
-- Regional availability and copyright restrictions can prevent a match.
-- NetEase and Spotify may use different artist, title, album, or version metadata.
-- Japanese, Chinese, and romanized metadata can still produce unmatched songs.
-- Live, remix, and other version differences may be intentionally rejected.
-- NetEase cookies expire.
+**No sufficiently reliable candidate**：matcher 无法可靠确认候选，不一定是程序错误。
 
-## Security
+**网易云认证失败**：Cookie 可能过期，请重新获取。
 
-- Never commit `.env`, Spotify credentials, or NetEase cookies.
-- Store runtime credentials only in GitHub Actions Secrets or an equivalent secret manager.
-- Rotate credentials immediately if they are exposed.
-- Never print tokens, secrets, cookies, or OAuth callback codes in logs.
-- Use a dedicated target playlist and review Dry Run output before enabling formal sync.
+**Dry Run 成功但 Playlist 没变化**：这是正常的，Dry Run 不写 Playlist。
 
-## Troubleshooting
-
-**Missing required environment variable**  
-A required GitHub Secret is missing or empty. Check all five names above.
-
-**Spotify 401 or token error**  
-Verify the Client ID, Client Secret, refresh token, redirect URI, and Spotify app configuration.
-
-**No sufficiently reliable candidate**  
-The matcher intentionally skipped the song because the available result was not reliable enough. Check the Dry Run candidate and rejection logs.
-
-**NetEase authentication failed**  
-The cookie may have expired. Obtain a fresh cookie from your own logged-in session.
-
-**Dry Run works but the playlist does not change**  
-That is expected: Dry Run is read-only. Use the formal sync workflow to write the playlist.
-
-## Development and tests
-
-Install dependencies and run:
-
+## 本地开发与测试
 ```bash
 python -m pip install -r requirements.txt
-PYTHONPATH=. pytest -q
+PYTHONPATH=. python -m pytest
 ```
 
-The tests cover normalization, artist aliases, version protection, candidate ranking, duration scoring, and setup helper behavior.
+## License
+本项目采用 MIT License，详见 [LICENSE](LICENSE)。
