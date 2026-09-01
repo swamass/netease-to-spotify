@@ -81,6 +81,7 @@ def main() -> None:
                 song["name"],
                 song["artists"],
                 song.get("album", ""),
+                duration_ms=song.get("duration_ms"),
             )
 
             if track_id and track_id not in seen_track_ids:
