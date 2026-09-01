@@ -2,6 +2,10 @@
 __pycache__/
 *.py[cod]
 .env
+.env.*
+!.env.example
 .DS_Store
 .pytest_cache/
+*.log
+match_report.json
 data/sync_state.json
