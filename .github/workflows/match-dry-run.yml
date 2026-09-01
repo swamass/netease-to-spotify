@@ -26,7 +26,6 @@ jobs:
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
           SPOTIFY_PLAYLIST_ID: ${{ secrets.SPOTIFY_PLAYLIST_ID }}
           NETEASE_COOKIE: ${{ secrets.NETEASE_COOKIE }}
-          NETEASE_CSRF_TOKEN: ${{ secrets.NETEASE_CSRF_TOKEN }}
         run: python -m src.dry_run | tee match-dry-run.log
 
       - name: Upload dry-run report
