@@ -277,3 +277,32 @@ def test_english_and_japanese_versions_do_not_cross_match(monkeypatch):
         )],
     )
     assert result is None
+
+
+def test_safe_unicode_variant_matches_without_romanization():
+    assert spotify._title_match("絶え间なく", "絶え間なく")
+
+
+def test_romanized_cjk_title_remains_unmatched():
+    assert not spotify._title_match("皆既月食", "Kaiki Gesshoku")
+
+
+def test_live_in_album_proves_candidate_live_version(monkeypatch):
+    result = run_search(
+        monkeypatch,
+        "One Day",
+        ["OMA", "Shing02"],
+        "Luv(Sic) Hexalogy (OMA and Shing02 Live at Liquidroom)",
+        [track(
+            "one-day-live",
+            "One Day - Live",
+            ["OMA", "Shing02"],
+            "Luv(Sic) Hexalogy [OMA and Shing02 Live at Liquidroom]",
+        )],
+    )
+    assert result == "one-day-live"
+
+
+def test_duration_is_passed_through_recommendation_shape():
+    recommendation = {"name": "Song", "artists": ["Artist"], "album": "Album", "duration_ms": 210000}
+    assert recommendation["duration_ms"] == 210000
