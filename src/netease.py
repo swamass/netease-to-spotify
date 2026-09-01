@@ -126,6 +126,15 @@ def _get_artist_names(song: dict) -> list[str]:
     ]
 
 
+def _get_duration_ms(song: dict) -> int | None:
+    value = song.get("dt") or song.get("duration_ms") or song.get("duration")
+    try:
+        duration_ms = int(value)
+    except (TypeError, ValueError):
+        return None
+    return duration_ms if duration_ms > 0 else None
+
+
 def get_daily_recommendations(cookie: str) -> list[dict]:
     """
     获取网易云音乐：
@@ -198,7 +207,7 @@ def get_daily_recommendations(cookie: str) -> list[dict]:
             "name": song.get("name", ""),
             "artists": _get_artist_names(song),
             "album": song.get("al", {}).get("name", "") or song.get("album", {}).get("name", ""),
-            "duration_ms": song.get("dt") or song.get("duration_ms"),
+            "duration_ms": _get_duration_ms(song),
         }
         for song in songs
     ]
