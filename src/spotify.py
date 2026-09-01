@@ -311,7 +311,17 @@ def _artist_matches(
     return score > 0, count
 
 
+def _coerce_duration_ms(value) -> int | None:
+    try:
+        duration_ms = int(value)
+    except (TypeError, ValueError):
+        return None
+    return duration_ms if duration_ms > 0 else None
+
+
 def _duration_score(source_duration_ms: int | None, spotify_duration_ms: int | None) -> int:
+    source_duration_ms = _coerce_duration_ms(source_duration_ms)
+    spotify_duration_ms = _coerce_duration_ms(spotify_duration_ms)
     if not source_duration_ms or not spotify_duration_ms:
         return 0
     difference = abs(source_duration_ms - spotify_duration_ms)
