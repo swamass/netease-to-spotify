@@ -2,6 +2,7 @@
 """Interactive helper for creating a Spotify refresh token locally."""
 
 import base64
+import getpass
 import secrets
 from urllib.parse import parse_qs, urlencode, urlparse
 
@@ -78,7 +79,7 @@ def exchange_code(client_id: str, client_secret: str, code: str) -> str:
 
 def main() -> None:
     client_id = input("Spotify Client ID: ").strip()
-    client_secret = input("Spotify Client Secret: ").strip()
+    client_secret = getpass.getpass("Spotify Client Secret: ").strip()
     playlist_input = input("Spotify playlist URL or ID: ")
     playlist_id = playlist_id_from_input(playlist_input)
 
