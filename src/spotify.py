@@ -404,7 +404,23 @@ def search_track(
 
             if not item_id:
                 reasons.append("missing track ID")
-            if not _title_match(name, item_name):
+            title_matches = _title_match(name, item_name)
+            if not title_matches:
+                source_release_terms = _version_terms(album)
+                candidate_release_terms = _version_terms(item_album_name)
+                live_is_confirmed = (
+                    "live" in source_release_terms
+                    and "live" in candidate_release_terms
+                )
+                if live_is_confirmed:
+                    title_without_live = re.sub(
+                        r"\s*-\s*live(?:\s+version)?\s*$",
+                        "",
+                        item_name,
+                        flags=re.IGNORECASE,
+                    )
+                    title_matches = _title_match(name, title_without_live)
+            if not title_matches:
                 reasons.append("title mismatch")
             artist_score, artist_count, artist_reliable = _artist_match_score(
                 artists, item_artists
