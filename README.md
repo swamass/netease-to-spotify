@@ -16,14 +16,25 @@
 本项目优先保证匹配准确性，而不是追求 100% 匹配率。matcher 综合考虑歌曲标题、艺人、专辑、时长，以及 Live / Remix / Remaster 等版本信息。无法可靠确认时会跳过，而不是强制加入可能错误的版本。
 
 ## 使用前准备
-- Python 3.12+
+- Python 3.12+（可从 [Python 官方网站](https://www.python.org/downloads/) 安装）
+- 可用的 Git
 - 自己的 Spotify Developer App
 - 一个可修改的 Spotify Playlist
 - 已登录的网易云音乐账号
 
 ## 快速开始
 ### 1. Fork 仓库
-Fork 本仓库，然后 clone 你自己的副本。
+Fork 本仓库后，后续配置和运行都在你自己的 Fork 中进行：
+
+1. 打开自己的 Fork，点击绿色 **Code** 按钮。
+2. 复制 HTTPS 仓库地址。
+3. 在 Terminal / PowerShell 中运行：
+   ```bash
+   git clone <你刚刚复制的仓库地址>
+   cd netease-to-spotify
+   ```
+
+如果电脑没有 `git`，请先从 [Git 官方下载页面](https://git-scm.com/downloads) 安装。
 
 ### 2. 创建 Spotify App
 打开 [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)，登录后点击 **Create app**。创建后进入该 App 的 **Settings**：
@@ -36,10 +47,14 @@ http://127.0.0.1:8888/callback
 ```
 
 ### 3. 运行 Setup
+在刚刚 clone 的项目根目录中运行：
+
 ```bash
 python -m pip install -r requirements.txt
 python setup.py
 ```
+
+可先用 `python --version` 检查版本；Windows 如果 `python` 不可用，可以将下面命令中的 `python` 替换为 `py`。
 Setup 接收 Playlist URL / ID，生成 OAuth URL，验证 OAuth state 并获取 Refresh Token。不会保存凭据或自动上传 GitHub Secrets，Client Secret 会隐藏输入。
 
 ### 4. 获取网易云 Cookie
