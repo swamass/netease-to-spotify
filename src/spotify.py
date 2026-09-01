@@ -135,6 +135,7 @@ def _normalize_text(value: str) -> str:
     """Normalize text while ignoring punctuation and presentation differences."""
     normalized = unicodedata.normalize("NFKC", value).casefold()
     normalized = normalized.replace("&", "and")
+    normalized = normalized.translate(str.maketrans({"间": "間"}))
     return "".join(character for character in normalized if character.isalnum())
 
 
