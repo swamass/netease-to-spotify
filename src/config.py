@@ -21,10 +21,9 @@ REQUIRED_ENV_VARS = (
 
 
 def load_settings() -> Settings:
-    missing = [name for name in REQUIRED_ENV_VARS if not os.getenv(name)]
-    if missing:
-        joined = ", ".join(missing)
-        raise RuntimeError(f"Missing required environment variables: {joined}")
+    for name in REQUIRED_ENV_VARS:
+        if not os.getenv(name):
+            raise RuntimeError(f"Missing required environment variable: {name}")
 
     return Settings(
         spotify_client_id=os.environ["SPOTIFY_CLIENT_ID"],
