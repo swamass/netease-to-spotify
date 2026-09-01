@@ -306,3 +306,21 @@ def test_live_in_album_proves_candidate_live_version(monkeypatch):
 def test_duration_is_passed_through_recommendation_shape():
     recommendation = {"name": "Song", "artists": ["Artist"], "album": "Album", "duration_ms": 210000}
     assert recommendation["duration_ms"] == 210000
+
+
+def test_duration_score_is_positive_for_close_millisecond_values():
+    assert spotify._duration_score(240000, 241500) > 0
+
+
+def test_search_scoring_uses_duration_to_prefer_closer_candidate(monkeypatch):
+    close = track("close", "Song", ["Artist"], "Album")
+    close["duration_ms"] = 241500
+    far = track("far", "Song", ["Artist"], "Compilation")
+    far["duration_ms"] = 280000
+    assert run_search(
+        monkeypatch,
+        "Song",
+        ["Artist"],
+        "Album",
+        [far, close],
+    ) == "close"
