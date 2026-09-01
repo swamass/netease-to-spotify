@@ -26,7 +26,11 @@
 Fork 本仓库，然后 clone 你自己的副本。
 
 ### 2. 创建 Spotify App
-创建自己的 Spotify Developer App，并添加 Redirect URI：
+打开 [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)，登录后点击 **Create app**。创建后进入该 App 的 **Settings**：
+- **Client ID** 在 App 页面直接可见。
+- 点击 **View client secret** 查看 Client Secret；不要公开或提交它。
+- 在 **Redirect URIs** 添加：
+
 ```
 http://127.0.0.1:8888/callback
 ```
@@ -39,10 +43,16 @@ python setup.py
 Setup 接收 Playlist URL / ID，生成 OAuth URL，验证 OAuth state 并获取 Refresh Token。不会保存凭据或自动上传 GitHub Secrets，Client Secret 会隐藏输入。
 
 ### 4. 获取网易云 Cookie
-从自己登录的网易云音乐会话获取 Cookie。项目不提供自动登录、密码保存或 Cookie 抓取功能。Cookie 过期后需要重新获取。
+打开并登录 [网易云音乐](https://music.163.com/)。以 Chrome 为例：按 **F12** 打开开发者工具，进入 **Application → Storage → Cookies → https://music.163.com**，确认当前是自己的登录会话；也可在 **Network** 中打开网易云请求查看 **Request Headers** 的 `Cookie`。
+
+复制完整的 Cookie header 内容（不要复制 `Cookie:` 这几个字），包括代码实际需要的 `__csrf` 字段，粘贴到 GitHub Secret `NETEASE_COOKIE`。不要把 Cookie 发给他人。Cookie 过期后需要重新获取。
 
 ### 5. 配置 GitHub Secrets
-在 Repository → Settings → Secrets and variables → Actions 中添加：
+在你自己的 Fork 仓库中打开 **Settings → Secrets and variables → Actions → New repository secret**。每次填写：
+- **Name**：下表中的变量名
+- **Secret**：从 Setup 或自己的登录会话获得的对应值
+
+
 
 | Secret | 用途 |
 | --- | --- |
@@ -53,10 +63,10 @@ Setup 接收 Playlist URL / ID，生成 OAuth URL，验证 OAuth state 并获取
 | `NETEASE_COOKIE` | 网易云登录 Cookie |
 
 ### 6. 先运行 Dry Run
-第一次使用建议手动运行 **NetEase Spotify Match Dry Run**。它会获取推荐、搜索 Spotify、执行 matcher 并输出统计，但不会清空、添加或修改 Playlist。
+打开你自己的仓库 **Actions**，选择 **NetEase Spotify Match Dry Run**，点击 **Run workflow → Run workflow**。运行完成后打开该 run 查看日志和 **Artifacts**。有匹配统计且没有配置/认证错误即可继续；它不会清空、添加或修改 Playlist。
 
 ### 7. 运行正式同步
-确认 Dry Run 后，手动运行 **Sync NetEase Daily Recommendations**，或等待定时运行。正式同步会替换目标 Playlist 内容，建议使用独立 Playlist。
+确认 Dry Run 后，打开 **Actions → Sync NetEase Daily Recommendations → Run workflow → Run workflow** 进行第一次正式运行。确认成功后，后续由 schedule 自动执行。正式同步会替换目标 Playlist 内容，建议使用独立 Playlist。
 
 ## Dry Run
 Dry Run 是只读验证入口，会生成匹配日志和 `match_report.json` artifact，不会调用 Playlist 写入接口。
