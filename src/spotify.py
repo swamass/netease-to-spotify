@@ -155,6 +155,7 @@ ARTIST_ALIASES = {
     "村田和人": ["Kazuhito Murata"],
     "中原めいこ": ["Meiko Nakahara"],
     "松下誠": ["Makoto Matsushita"],
+    "福原美穂": ["Miho Fukuhara"],
 }
 
 TITLE_ALIASES = {
@@ -460,12 +461,25 @@ def search_track(
 
             title_points = 300 if title_exact else 276
             version_points = 100
+            additional_artist_penalty = 0
+            if (
+                len(artists) == 1
+                and len(item_artists) > 1
+                and album_points < 45
+            ):
+                additional_artist_penalty = 100
+                print(
+                    "Applied conservative additional-artist penalty: "
+                    f"{additional_artist_penalty}"
+                )
+
             score = (
                 title_points
                 + 500 * artist_score
                 + album_points
                 + duration_points
                 + version_points
+                - additional_artist_penalty
             )
             print(
                 f"Candidate score: title={title_points}, "
