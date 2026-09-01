@@ -38,6 +38,7 @@ def main() -> None:
                 song["name"],
                 song["artists"],
                 song.get("album", ""),
+                duration_ms=song.get("duration_ms"),
             )
         except SpotifyRateLimitError:
             raise
