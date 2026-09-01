@@ -27,4 +27,4 @@ jobs:
       - name: Run matching tests
         env:
           PYTHONPATH: .
-        run: python -m pytest -q
+        run: python -m pytest
