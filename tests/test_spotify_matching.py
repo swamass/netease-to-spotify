@@ -655,3 +655,67 @@ def test_cjk_auxiliary_title_key_uses_injected_converter(monkeypatch):
         lambda value: value.replace("后", "後"),
     )
     assert spotify._cjk_title_status("最后の言い訳", "最後の言い訳") == "CJK_EQUIVALENT"
+
+
+def test_musicbrainz_empty_artist_search_is_not_confirmed(monkeypatch):
+    monkeypatch.setattr(spotify, "_musicbrainz_artist_ids", lambda _name: set())
+    assert not spotify._musicbrainz_artist_identity(
+        ["德永英明"], [{"name": "Hideaki Tokunaga"}]
+    )
+
+
+def test_musicbrainz_timeout_preserves_baseline_decisions(monkeypatch):
+    accepted = track("accepted", "Song", ["Romanized Artist"], "Album")
+    uncertain = track("uncertain", "Song", ["Romanized Artist"], "Other Collection")
+
+    def timeout(*_args, **_kwargs):
+        raise spotify.requests.Timeout()
+
+    monkeypatch.setattr(spotify.requests, "get", timeout)
+    monkeypatch.setattr(spotify.time, "sleep", lambda *_args: None)
+    assert run_search(monkeypatch, "Song", ["中文艺人"], "Album", [accepted]) == "accepted"
+    assert run_search(monkeypatch, "Song", ["中文艺人"], "Album", [uncertain]) is None
+
+
+def test_musicbrainz_network_error_preserves_baseline_decisions(monkeypatch):
+    accepted = track("accepted", "Song", ["Romanized Artist"], "Album")
+    uncertain = track("uncertain", "Song", ["Romanized Artist"], "Other Collection")
+
+    def network_error(*_args, **_kwargs):
+        raise spotify.requests.ConnectionError()
+
+    monkeypatch.setattr(spotify.requests, "get", network_error)
+    monkeypatch.setattr(spotify.time, "sleep", lambda *_args: None)
+    assert run_search(monkeypatch, "Song", ["中文艺人"], "Album", [accepted]) == "accepted"
+    assert run_search(monkeypatch, "Song", ["中文艺人"], "Album", [uncertain]) is None
+
+
+def test_direct_musicbrainz_intersection_skips_alias_detail(monkeypatch):
+    detail_calls = []
+    monkeypatch.setattr(spotify, "_musicbrainz_artist_ids", lambda _name: {"same-mbid"})
+    monkeypatch.setattr(
+        spotify,
+        "_musicbrainz_artist_names",
+        lambda mbid: detail_calls.append(mbid) or None,
+    )
+    assert spotify._musicbrainz_artist_identity(
+        ["王菲"], [{"name": "Faye Wong"}]
+    ) == {"same-mbid"}
+    assert detail_calls == []
+
+
+def test_candidate_ordering_does_not_change_selected_track(monkeypatch):
+    candidates = [
+        track("wrong", "Home", ["Artist B"], "Album"),
+        track("right", "Home", ["Artist A"], "Album"),
+        track("other", "Home", ["Artist A"], "Compilation"),
+    ]
+    first = run_search(monkeypatch, "Home", ["Artist A"], "Album", candidates)
+    second = run_search(monkeypatch, "Home", ["Artist A"], "Album", list(reversed(candidates)))
+    assert first == second == "right"
+
+
+def test_isrc_alone_does_not_accept_unconfirmed_artist(monkeypatch):
+    candidate = track("isrc-only", "Song", ["Other Artist"], "Album")
+    candidate["external_ids"] = {"isrc": "US-TEST"}
+    assert run_search(monkeypatch, "Song", ["中文艺人"], "Album", [candidate]) is None
