@@ -327,16 +327,6 @@ def _artist_match_score(
     return 0.0, 0, False
 
 
-def _artist_matches(
-    source_artists: list[str],
-    spotify_artists: list[dict],
-) -> tuple[bool, int]:
-    score, count, reliable = _artist_match_score(
-        source_artists, spotify_artists
-    )
-    return score > 0, count
-
-
 def _musicbrainz_get(path: str, params: dict[str, str]) -> dict[str, Any] | None:
     """Read MusicBrainz conservatively; failures never affect the sync."""
     global _musicbrainz_last_request
@@ -568,10 +558,6 @@ def _album_score(source_album: str, spotify_album: str) -> int:
     return 10
 
 
-def _release_has_invalid_terms(name: str, album: str) -> bool:
-    return bool(_version_terms(name) | _version_terms(album) & INVALID_RELEASE_TERMS)
-
-
 def _version_conflicts(source_name: str, source_album: str,
                        candidate_name: str, candidate_album: str) -> list[str]:
     source_terms = _version_terms(source_name) | _version_terms(source_album)
@@ -674,7 +660,7 @@ def search_track(
                     title_matches = _title_match(name, title_without_live)
             if not title_matches:
                 reasons.append("title mismatch")
-            artist_score, artist_count, artist_reliable = _artist_match_score(
+            artist_score, _, artist_reliable = _artist_match_score(
                 artists, item_artists
             )
             album_points = _album_score(album, item_album_name)
