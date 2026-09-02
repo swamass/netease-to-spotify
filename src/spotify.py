@@ -324,6 +324,7 @@ def _musicbrainz_get(path: str, params: dict[str, str]) -> dict[str, Any] | None
     global _musicbrainz_last_request
     cache_key = (path, "&".join(f"{key}={params[key]}" for key in sorted(params)))
     if cache_key in _musicbrainz_cache:
+        print(f"MusicBrainz lookup: path={path} cache_hit=yes")
         return _musicbrainz_cache[cache_key]
     wait = MUSICBRAINZ_REQUEST_INTERVAL - (time.monotonic() - _musicbrainz_last_request)
     if wait > 0:
@@ -342,19 +343,23 @@ def _musicbrainz_get(path: str, params: dict[str, str]) -> dict[str, Any] | None
                     time.sleep(2 ** attempt)
                     continue
                 _musicbrainz_cache[cache_key] = None
+                print(f"MusicBrainz lookup: path={path} result=UNAVAILABLE cache_hit=no")
                 return None
             if response.status_code == 404:
                 _musicbrainz_cache[cache_key] = None
+                print(f"MusicBrainz lookup: path={path} result=NOT_FOUND cache_hit=no")
                 return None
             response.raise_for_status()
             result = response.json()
             _musicbrainz_cache[cache_key] = result
+            print(f"MusicBrainz lookup: path={path} result=FOUND cache_hit=no")
             return result
         except (requests.RequestException, ValueError):
             if attempt < 2:
                 time.sleep(2 ** attempt)
                 continue
             _musicbrainz_cache[cache_key] = None
+            print(f"MusicBrainz lookup: path={path} result=UNAVAILABLE cache_hit=no")
             return None
     return None
 
@@ -408,7 +413,17 @@ def _musicbrainz_artist_identity_supported(
     candidate_artists = candidate.get("artists", [])
     if not candidate_artists:
         return False
-    return bool(_musicbrainz_artist_identity(source_artists, candidate_artists))
+    source_names = ", ".join(source_artists)
+    candidate_names = ", ".join(
+        artist.get("name", "") for artist in candidate_artists
+    )
+    matched_ids = _musicbrainz_artist_identity(source_artists, candidate_artists)
+    print(
+        "MB artist identity: "
+        f"source_artist={source_names} spotify_artist={candidate_names} "
+        f"identity={'CONFIRMED' if matched_ids else 'NOT_CONFIRMED'}"
+    )
+    return bool(matched_ids)
 
 
 def _musicbrainz_recording_identity_accepts(
@@ -434,6 +449,7 @@ def _musicbrainz_recording_identity_accepts(
     if not artist_ids:
         return False
     recordings = _musicbrainz_recordings_for_isrc(isrc)
+    print(f"MB ISRC lookup: isrc={isrc} recording_count={len(recordings)}")
     if not recordings:
         return False
     candidate_duration = _coerce_duration_ms(candidate.get("duration_ms"))
@@ -454,7 +470,13 @@ def _musicbrainz_recording_identity_accepts(
         difference = abs(duration - candidate_duration) if duration and candidate_duration else None
         if best_difference is None or (difference is not None and difference < best_difference):
             best_difference = difference
-    return best_difference is None or best_difference <= 30000
+    confirmed = best_difference is None or best_difference <= 30000
+    print(
+        "MB ISRC verification: "
+        f"isrc={isrc} duration_diff_ms={best_difference} "
+        f"result={'CONFIRMED' if confirmed else 'NOT_CONFIRMED'}"
+    )
+    return confirmed
 
 
 def _coerce_duration_ms(value) -> int | None:
@@ -594,8 +616,35 @@ def search_track(
                 artist_reliable
                 or (title_exact and album_points >= 45)
             )
+            baseline_accept = (
+                title_matches and not version_reasons and baseline_artist_acceptable
+            )
+            spotify_isrc = (item.get("external_ids") or {}).get("isrc")
+            print(
+                "MusicBrainz fallback: "
+                f"track={item_name} source_artist={', '.join(artists)} "
+                f"spotify_artist={', '.join(value.get('name', '') for value in item_artists)} "
+                f"baseline={'ACCEPT' if baseline_accept else 'REJECT'} "
+                f"spotify_isrc={spotify_isrc or 'NONE'}"
+            )
+            if baseline_accept:
+                print("SKIP: baseline already accepted")
+            elif not title_matches:
+                print("SKIP: title conflict")
+            elif version_reasons:
+                print("SKIP: version conflict")
+            elif artist_score == 0:
+                print("SKIP: artist mismatch is hard reject")
+            elif artist_score != 0.35 or artist_reliable:
+                print("SKIP: not a cross-language uncertainty")
+            else:
+                print(
+                    "MusicBrainz fallback: fallback_eligible=yes "
+                    f"reason=cross-language artist uncertainty "
+                    f"spotify_isrc={spotify_isrc or 'NONE'}"
+                )
             if (
-                not (title_matches and not version_reasons and baseline_artist_acceptable)
+                not baseline_accept
                 and
                 artist_score == 0.35
                 and not artist_reliable
