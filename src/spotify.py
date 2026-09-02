@@ -10,6 +10,18 @@ import requests
 from . import cjk_title_keys
 
 
+def _load_cjk_converter():
+    try:
+        from opencc import OpenCC
+
+        return OpenCC("s2t").convert
+    except Exception:
+        return None
+
+
+_cjk_converter = _load_cjk_converter()
+
+
 SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
 SPOTIFY_API_URL = "https://api.spotify.com/v1"
 
@@ -251,8 +263,7 @@ def _title_match(source: str, candidate: str) -> bool:
 
 
 def _cjk_title_status(source: str, candidate: str) -> str:
-    """Keep CJK conversion disabled until an explicit converter is injected."""
-    return cjk_title_keys.title_status(source, candidate)
+    return cjk_title_keys.title_status(source, candidate, _cjk_converter)
 
 
 def _title_variants(name: str) -> list[str]:

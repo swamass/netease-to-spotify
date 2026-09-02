@@ -591,5 +591,15 @@ def test_cjk_auxiliary_title_key_can_enter_full_matcher_without_changing_baselin
     ) == "cjk"
 
 
-def test_cjk_auxiliary_title_key_is_disabled_without_converter():
+def test_cjk_auxiliary_title_key_is_disabled_without_converter(monkeypatch):
+    monkeypatch.setattr(spotify, "_cjk_converter", None)
     assert spotify._cjk_title_status("最后の言い訳", "最後の言い訳") == "NO_MATCH"
+
+
+def test_cjk_auxiliary_title_key_uses_injected_converter(monkeypatch):
+    monkeypatch.setattr(
+        spotify,
+        "_cjk_converter",
+        lambda value: value.replace("后", "後"),
+    )
+    assert spotify._cjk_title_status("最后の言い訳", "最後の言い訳") == "CJK_EQUIVALENT"
