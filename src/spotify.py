@@ -7,6 +7,8 @@ from typing import Any
 
 import requests
 
+from . import cjk_title_keys
+
 
 SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
 SPOTIFY_API_URL = "https://api.spotify.com/v1"
@@ -246,6 +248,11 @@ def _title_match(source: str, candidate: str) -> bool:
             if distance <= 3 and ratio >= 0.92:
                 return True
     return False
+
+
+def _cjk_title_status(source: str, candidate: str) -> str:
+    """Keep CJK conversion disabled until an explicit converter is injected."""
+    return cjk_title_keys.title_status(source, candidate)
 
 
 def _title_variants(name: str) -> list[str]:
@@ -635,6 +642,13 @@ def search_track(
             version_reasons = _version_conflicts(
                 name, album, item_name, item_album_name
             )
+            cjk_status = cjk_title_keys.NO_MATCH
+            if not title_matches and not version_reasons:
+                cjk_status = _cjk_title_status(name, item_name)
+                if cjk_status == cjk_title_keys.CJK_EQUIVALENT:
+                    title_matches = True
+                    reasons = [reason for reason in reasons if reason != "title mismatch"]
+                    print("CJK auxiliary title status: CJK_EQUIVALENT")
             identity_verified = False
             baseline_artist_acceptable = artist_score > 0 and (
                 artist_reliable

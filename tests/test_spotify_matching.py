@@ -577,3 +577,19 @@ def test_musicbrainz_artist_alias_requires_relevant_multi_artist_match(monkeypat
     assert not spotify._musicbrainz_artist_identity(
         ["岩崎太整"], [{"name": "Ai Ninomiya"}]
     )
+
+
+def test_cjk_auxiliary_title_key_can_enter_full_matcher_without_changing_baseline(monkeypatch):
+    candidate = track("cjk", "最後の言い訳", ["Artist"], "Album")
+    monkeypatch.setattr(
+        spotify,
+        "_cjk_title_status",
+        lambda _source, _candidate: "CJK_EQUIVALENT",
+    )
+    assert run_search(
+        monkeypatch, "最后の言い訳", ["Artist"], "Album", [candidate]
+    ) == "cjk"
+
+
+def test_cjk_auxiliary_title_key_is_disabled_without_converter():
+    assert spotify._cjk_title_status("最后の言い訳", "最後の言い訳") == "NO_MATCH"
