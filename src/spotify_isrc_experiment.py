@@ -87,7 +87,7 @@ def _recording_report(title: str, artist_report: dict[str, Any]) -> dict[str, An
         recordings = data.get("recordings", [])
         if recordings:
             return _musicbrainz_get(
-                f"{MUSICBRAINZ_URL}/recording/{recordings[0]["id"]}",
+                f"{MUSICBRAINZ_URL}/recording/{recordings[0]['id']}",
                 {"inc": "artist-credits+releases+isrcs", "fmt": "json"},
             )
     return None
@@ -99,7 +99,7 @@ def _spotify_track(case: dict[str, Any], token: str) -> dict[str, Any] | None:
     if not items:
         return None
     candidate = items[0]
-    return _spotify_get(f"{SPOTIFY_API_URL}/tracks/{candidate["id"]}", token)
+    return _spotify_get(f"{SPOTIFY_API_URL}/tracks/{candidate['id']}", token)
 
 
 def run_experiment(client_id: str, client_secret: str, refresh_token: str) -> list[dict[str, Any]]:
