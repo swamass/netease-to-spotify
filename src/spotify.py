@@ -411,24 +411,29 @@ def _musicbrainz_artist_names(mbid: str) -> set[str]:
 def _musicbrainz_artist_identity(
     source_artists: list[str], spotify_artists: list[dict],
 ) -> set[str]:
-    source_ids = set().union(*(_musicbrainz_artist_ids(name) for name in source_artists))
-    spotify_ids = set().union(*(
-        _musicbrainz_artist_ids(artist.get("name", ""))
-        for artist in spotify_artists
-    ))
+    if not source_artists or not spotify_artists:
+        return set()
+    primary_source = source_artists[0]
+    source_ids = _musicbrainz_artist_ids(primary_source)
+    spotify_names = [artist.get("name", "") for artist in spotify_artists if artist.get("name")]
+    spotify_ids_by_name = {name: _musicbrainz_artist_ids(name) for name in spotify_names}
+    spotify_ids = set().union(*(ids for ids in spotify_ids_by_name.values()))
     direct_matches = source_ids & spotify_ids
     if direct_matches:
         return direct_matches
 
-    spotify_names = {
-        _normalize_text(artist.get("name", ""))
-        for artist in spotify_artists
-        if artist.get("name")
-    }
-    return {
-        mbid for mbid in source_ids
-        if spotify_names & _musicbrainz_artist_names(mbid)
-    }
+    source_name = _normalize_text(primary_source)
+    confirmed = set()
+    for mbid in source_ids:
+        source_aliases = _musicbrainz_artist_names(mbid)
+        if any(_normalize_text(name) in source_aliases for name in spotify_names):
+            confirmed.add(mbid)
+    for spotify_name, candidate_ids in spotify_ids_by_name.items():
+        for mbid in candidate_ids:
+            candidate_aliases = _musicbrainz_artist_names(mbid)
+            if source_name in candidate_aliases:
+                confirmed.add(mbid)
+    return confirmed
 
 
 def _musicbrainz_recordings_for_isrc(isrc: str) -> list[dict[str, Any]]:
