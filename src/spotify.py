@@ -585,6 +585,33 @@ def _version_conflicts(source_name: str, source_album: str,
     return reasons
 
 
+def _baseline_artist_acceptable(
+    artist_score: float,
+    artist_reliable: bool,
+    title_exact: bool,
+    album_points: int,
+) -> bool:
+    return artist_score > 0 and (
+        artist_reliable or (title_exact and album_points >= 45)
+    )
+
+
+def _musicbrainz_fallback_eligible(
+    baseline_accept: bool,
+    artist_score: float,
+    artist_reliable: bool,
+    title_matches: bool,
+    version_reasons: list[str],
+) -> bool:
+    return (
+        not baseline_accept
+        and artist_score == 0.35
+        and not artist_reliable
+        and title_matches
+        and not version_reasons
+    )
+
+
 def search_track(
     access_token: str,
     name: str,
@@ -666,9 +693,8 @@ def search_track(
                     reasons = [reason for reason in reasons if reason != "title mismatch"]
                     print("CJK auxiliary title status: CJK_EQUIVALENT")
             identity_verified = False
-            baseline_artist_acceptable = artist_score > 0 and (
-                artist_reliable
-                or (title_exact and album_points >= 45)
+            baseline_artist_acceptable = _baseline_artist_acceptable(
+                artist_score, artist_reliable, title_exact, album_points
             )
             baseline_accept = (
                 title_matches and not version_reasons and baseline_artist_acceptable
@@ -697,13 +723,12 @@ def search_track(
                     f"reason=cross-language artist uncertainty "
                     f"spotify_isrc={spotify_isrc or 'NONE'}"
                 )
-            if (
-                not baseline_accept
-                and
-                artist_score == 0.35
-                and not artist_reliable
-                and title_matches
-                and not version_reasons
+            if _musicbrainz_fallback_eligible(
+                baseline_accept,
+                artist_score,
+                artist_reliable,
+                title_matches,
+                version_reasons,
             ):
                 artist_identity_supported = _musicbrainz_artist_identity_supported(
                     artists, item
