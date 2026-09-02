@@ -475,7 +475,7 @@ def test_musicbrainz_isrc_chooses_close_recording_over_dj_mix(monkeypatch):
     assert calls.count("https://musicbrainz.org/ws/2/recording/dj") == 1
 
 
-def test_musicbrainz_not_found_fails_open_without_accepting_uncertain_candidate(monkeypatch):
+def test_musicbrainz_not_found_preserves_baseline_accept(monkeypatch):
     candidate = track("on-my-own", "On My Own", ["Taisei Iwasaki"], "Album")
     candidate.update({"external_ids": {"isrc": "US5941406269"}})
 
@@ -486,10 +486,10 @@ def test_musicbrainz_not_found_fails_open_without_accepting_uncertain_candidate(
 
     monkeypatch.setattr(spotify.requests, "get", fake_get)
     monkeypatch.setattr(spotify.time, "sleep", lambda *_args: None)
-    assert run_search(monkeypatch, "On My Own", ["岩崎太整"], "Album", [candidate]) is None
+    assert run_search(monkeypatch, "On My Own", ["岩崎太整"], "Album", [candidate]) == "on-my-own"
 
 
-def test_musicbrainz_503_fails_open(monkeypatch):
+def test_musicbrainz_503_preserves_baseline_accept(monkeypatch):
     candidate = track("candidate", "Song", ["Romanized Artist"], "Album")
     candidate["external_ids"] = {"isrc": "US-503"}
 
@@ -497,6 +497,19 @@ def test_musicbrainz_503_fails_open(monkeypatch):
         return FakeMBResponse({}, status_code=503)
 
     monkeypatch.setattr(spotify.requests, "get", fake_get)
+    monkeypatch.setattr(spotify.time, "sleep", lambda *_args: None)
+    assert run_search(monkeypatch, "Song", ["中文艺人"], "Album", [candidate]) == "candidate"
+
+
+def test_musicbrainz_failure_preserves_baseline_reject(monkeypatch):
+    candidate = track("uncertain", "Song", ["Romanized Artist"], "Different Album")
+    candidate["external_ids"] = {"isrc": "US-UNCERTAIN"}
+
+    monkeypatch.setattr(
+        spotify.requests,
+        "get",
+        lambda *_args, **_kwargs: FakeMBResponse({}, status_code=503),
+    )
     monkeypatch.setattr(spotify.time, "sleep", lambda *_args: None)
     assert run_search(monkeypatch, "Song", ["中文艺人"], "Album", [candidate]) is None
 

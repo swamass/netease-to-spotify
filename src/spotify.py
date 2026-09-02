@@ -590,7 +590,13 @@ def search_track(
                 name, album, item_name, item_album_name
             )
             identity_verified = False
+            baseline_artist_acceptable = artist_score > 0 and (
+                artist_reliable
+                or (title_exact and album_points >= 45)
+            )
             if (
+                not (title_matches and not version_reasons and baseline_artist_acceptable)
+                and
                 artist_score == 0.35
                 and not artist_reliable
                 and title_matches
