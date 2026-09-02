@@ -716,6 +716,12 @@ def test_candidate_ordering_does_not_change_selected_track(monkeypatch):
 
 
 def test_isrc_alone_does_not_accept_unconfirmed_artist(monkeypatch):
-    candidate = track("isrc-only", "Song", ["Other Artist"], "Album")
+    candidate = track("isrc-only", "Song", ["Other Artist"], "Other Collection")
     candidate["external_ids"] = {"isrc": "US-TEST"}
-    assert run_search(monkeypatch, "Song", ["中文艺人"], "Album", [candidate]) is None
+    assert run_search(
+        monkeypatch,
+        "Song",
+        ["中文艺人"],
+        "Original Album",
+        [candidate],
+    ) is None
