@@ -534,8 +534,8 @@ def test_musicbrainz_artist_alias_confirms_cross_language_names(monkeypatch):
     }
     aliases = {
         "faye-mbid": {"王菲", "fayewong"},
-        "hiroko-mbid": {"薬師丸ひろ子", "hiroko yakushimaru"},
-        "taisei-mbid": {"岩崎太整", "taisei iwasaki"},
+        "hiroko-mbid": {"薬師丸ひろ子", "hirokoyakushimaru"},
+        "taisei-mbid": {"岩崎太整", "taiseiiwasaki"},
     }
     monkeypatch.setattr(spotify, "_musicbrainz_artist_ids", ids.get)
     monkeypatch.setattr(spotify, "_musicbrainz_artist_names", aliases.get)
