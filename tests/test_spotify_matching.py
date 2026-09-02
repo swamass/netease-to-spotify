@@ -521,3 +521,59 @@ def test_musicbrainz_cannot_override_title_or_version_conflict(monkeypatch):
     monkeypatch.setattr(spotify.requests, "get", lambda *args, **kwargs: called.append(args) or FakeMBResponse({}))
     assert run_search(monkeypatch, "Song", ["中文艺人"], "Album", [candidate]) is None
     assert not called
+
+
+def test_musicbrainz_artist_alias_confirms_cross_language_names(monkeypatch):
+    ids = {
+        "王菲": {"faye-mbid"},
+        "Faye Wong": {"faye-search-mbid"},
+        "薬師丸ひろ子": {"hiroko-mbid"},
+        "Hiroko Yakushimaru": {"hiroko-search-mbid"},
+        "岩崎太整": {"taisei-mbid"},
+        "Taisei Iwasaki": {"taisei-search-mbid"},
+    }
+    aliases = {
+        "faye-mbid": {"王菲", "fayewong"},
+        "hiroko-mbid": {"薬師丸ひろ子", "hiroko yakushimaru"},
+        "taisei-mbid": {"岩崎太整", "taisei iwasaki"},
+    }
+    monkeypatch.setattr(spotify, "_musicbrainz_artist_ids", ids.get)
+    monkeypatch.setattr(spotify, "_musicbrainz_artist_names", aliases.get)
+    for source, candidate in [
+        ("王菲", "Faye Wong"),
+        ("薬師丸ひろ子", "Hiroko Yakushimaru"),
+        ("岩崎太整", "Taisei Iwasaki"),
+    ]:
+        assert spotify._musicbrainz_artist_identity(
+            [source], [{"name": candidate}]
+        )
+
+
+def test_musicbrainz_artist_alias_rejects_unrelated_names(monkeypatch):
+    monkeypatch.setattr(
+        spotify,
+        "_musicbrainz_artist_ids",
+        lambda name: {"faye-mbid"} if name == "王菲" else {"a7s-mbid"},
+    )
+    monkeypatch.setattr(
+        spotify,
+        "_musicbrainz_artist_names",
+        lambda mbid: {"王菲", "fayewong"} if mbid == "faye-mbid" else {"a7s"},
+    )
+    assert not spotify._musicbrainz_artist_identity(["王菲"], [{"name": "A7S"}])
+
+
+def test_musicbrainz_artist_alias_requires_relevant_multi_artist_match(monkeypatch):
+    monkeypatch.setattr(
+        spotify,
+        "_musicbrainz_artist_ids",
+        lambda name: {"source-mbid"} if name == "岩崎太整" else {"unrelated-mbid"},
+    )
+    monkeypatch.setattr(
+        spotify,
+        "_musicbrainz_artist_names",
+        lambda mbid: {"taisei iwasaki"} if mbid == "source-mbid" else {"ai ninomiya"},
+    )
+    assert not spotify._musicbrainz_artist_identity(
+        ["岩崎太整"], [{"name": "Ai Ninomiya"}]
+    )

@@ -378,6 +378,18 @@ def _musicbrainz_artist_ids(name: str) -> set[str]:
     }
 
 
+def _musicbrainz_artist_names(mbid: str) -> set[str]:
+    data = _musicbrainz_get(
+        f"artist/{mbid}",
+        {"fmt": "json", "inc": "aliases"},
+    )
+    if not data:
+        return set()
+    names = {data.get("name", ""), data.get("sort-name", "")}
+    names.update(alias.get("name", "") for alias in data.get("aliases", []))
+    return {_normalize_text(name) for name in names if name}
+
+
 def _musicbrainz_artist_identity(
     source_artists: list[str], spotify_artists: list[dict],
 ) -> set[str]:
@@ -386,7 +398,19 @@ def _musicbrainz_artist_identity(
         _musicbrainz_artist_ids(artist.get("name", ""))
         for artist in spotify_artists
     ))
-    return source_ids & spotify_ids
+    direct_matches = source_ids & spotify_ids
+    if direct_matches:
+        return direct_matches
+
+    spotify_names = {
+        _normalize_text(artist.get("name", ""))
+        for artist in spotify_artists
+        if artist.get("name")
+    }
+    return {
+        mbid for mbid in source_ids
+        if spotify_names & _musicbrainz_artist_names(mbid)
+    }
 
 
 def _musicbrainz_recordings_for_isrc(isrc: str) -> list[dict[str, Any]]:
