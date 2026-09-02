@@ -586,7 +586,15 @@ def test_musicbrainz_artist_alias_does_not_cross_confirm_different_mbids(monkeyp
 
 
 def test_musicbrainz_artist_names_none_is_not_confirmed(monkeypatch):
-    monkeypatch.setattr(spotify, "_musicbrainz_artist_ids", lambda _name: {"missing-mbid"})
+    ids = {
+        "德永英明": {"source-mbid"},
+        "Hideaki Tokunaga": {"spotify-mbid"},
+    }
+    monkeypatch.setattr(
+        spotify,
+        "_musicbrainz_artist_ids",
+        lambda name: ids.get(name, set()),
+    )
     monkeypatch.setattr(spotify, "_musicbrainz_artist_names", lambda _mbid: None)
     assert not spotify._musicbrainz_artist_identity(
         ["德永英明"], [{"name": "Hideaki Tokunaga"}]
