@@ -502,7 +502,7 @@ def test_musicbrainz_503_preserves_baseline_accept(monkeypatch):
 
 
 def test_musicbrainz_failure_preserves_baseline_reject(monkeypatch):
-    candidate = track("uncertain", "Song", ["Romanized Artist"], "Different Album")
+    candidate = track("uncertain", "Song", ["Romanized Artist"], "Other Collection")
     candidate["external_ids"] = {"isrc": "US-UNCERTAIN"}
 
     monkeypatch.setattr(
