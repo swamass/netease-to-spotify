@@ -393,3 +393,118 @@ def test_weak_artist_case_is_not_made_more_permissive():
     )
     assert score == 0.35
     assert not reliable
+
+
+def test_musicbrainz_fallback_confirms_cross_language_artist_and_isrc(monkeypatch):
+    candidate = track("faye", "Eyes On Me", ["Faye Wong"], "Eyes On Me")
+    candidate.update({"external_ids": {"isrc": "US-TEST"}, "duration_ms": 240000})
+
+    def fake_get(url, params, **_kwargs):
+        query = params.get("query", "")
+        if url.endswith("/artist"):
+            if "王菲" in query:
+                return FakeMBResponse({"artists": [{"id": "faye-mbid"}]})
+            return FakeMBResponse({"artists": [{"id": "faye-mbid"}]})
+        if "/isrc/US-TEST" in url:
+            return FakeMBResponse({"recordings": [{"id": "recording-mbid"}]})
+        return FakeMBResponse({
+            "id": "recording-mbid",
+            "title": "Eyes On Me",
+            "length": 240500,
+            "artist-credit": [{"artist": {"id": "faye-mbid"}}],
+            "disambiguation": "",
+        })
+
+    monkeypatch.setattr(spotify.requests, "get", fake_get)
+    monkeypatch.setattr(spotify.time, "sleep", lambda *_args: None)
+    monkeypatch.setattr(spotify.time, "monotonic", lambda: 100.0)
+    assert run_search(monkeypatch, "Eyes On Me", ["王菲"], "Eyes On Me", [candidate]) == "faye"
+
+
+class FakeMBResponse:
+    def __init__(self, payload, status_code=200):
+        self.payload = payload
+        self.status_code = status_code
+
+    def json(self):
+        return self.payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise spotify.requests.HTTPError()
+
+
+def test_musicbrainz_artist_fallback_runs_without_isrc_and_skips_recording_lookup(monkeypatch):
+    candidate = track("faye-no-isrc", "Eyes On Me", ["Faye Wong"], "Eyes On Me")
+    calls = []
+
+    def fake_get(url, params, **_kwargs):
+        calls.append(url)
+        return FakeMBResponse({"artists": [{"id": "faye-mbid"}]})
+
+    monkeypatch.setattr(spotify.requests, "get", fake_get)
+    monkeypatch.setattr(spotify.time, "sleep", lambda *_args: None)
+    assert run_search(
+        monkeypatch, "Eyes On Me", ["王菲"], "Eyes On Me", [candidate]
+    ) == "faye-no-isrc"
+    assert not any("/isrc/" in url for url in calls)
+
+
+def test_musicbrainz_isrc_chooses_close_recording_over_dj_mix(monkeypatch):
+    candidate = track("hiroko", "あなたを・もっと・知りたくて", ["Hiroko Yakushimaru"], "Best")
+    candidate.update({"external_ids": {"isrc": "JPTO08517910"}, "duration_ms": 233040})
+    calls = []
+
+    def fake_get(url, params, **_kwargs):
+        calls.append(url)
+        if url.endswith("/artist"):
+            return FakeMBResponse({"artists": [{"id": "hiroko-mbid"}]})
+        if url.endswith("/isrc/JPTO08517910"):
+            return FakeMBResponse({"recordings": [{"id": "dj"}, {"id": "normal"}]})
+        if url.endswith("/recording/dj"):
+            return FakeMBResponse({"id": "dj", "title": "あなたを・もっと・知りたくて", "length": 109000,
+                                    "artist-credit": [{"artist": {"id": "hiroko-mbid"}}],
+                                    "disambiguation": "DJ-mixed"})
+        return FakeMBResponse({"id": "normal", "title": "あなたを・もっと・知りたくて", "length": 232293,
+                                "artist-credit": [{"artist": {"id": "hiroko-mbid"}}],
+                                "disambiguation": ""})
+
+    monkeypatch.setattr(spotify.requests, "get", fake_get)
+    monkeypatch.setattr(spotify.time, "sleep", lambda *_args: None)
+    assert run_search(monkeypatch, "あなたを・もっと・知りたくて", ["薬師丸ひろ子"], "", [candidate]) == "hiroko"
+    assert calls.count("https://musicbrainz.org/ws/2/recording/dj") == 1
+
+
+def test_musicbrainz_not_found_fails_open_without_accepting_uncertain_candidate(monkeypatch):
+    candidate = track("on-my-own", "On My Own", ["Taisei Iwasaki"], "Album")
+    candidate.update({"external_ids": {"isrc": "US5941406269"}})
+
+    def fake_get(url, params, **_kwargs):
+        if url.endswith("/artist"):
+            return FakeMBResponse({"artists": [{"id": "artist-mbid"}]})
+        return FakeMBResponse({}, status_code=404)
+
+    monkeypatch.setattr(spotify.requests, "get", fake_get)
+    monkeypatch.setattr(spotify.time, "sleep", lambda *_args: None)
+    assert run_search(monkeypatch, "On My Own", ["岩崎太整"], "Album", [candidate]) is None
+
+
+def test_musicbrainz_503_fails_open(monkeypatch):
+    candidate = track("candidate", "Song", ["Romanized Artist"], "Album")
+    candidate["external_ids"] = {"isrc": "US-503"}
+
+    def fake_get(*_args, **_kwargs):
+        return FakeMBResponse({}, status_code=503)
+
+    monkeypatch.setattr(spotify.requests, "get", fake_get)
+    monkeypatch.setattr(spotify.time, "sleep", lambda *_args: None)
+    assert run_search(monkeypatch, "Song", ["中文艺人"], "Album", [candidate]) is None
+
+
+def test_musicbrainz_cannot_override_title_or_version_conflict(monkeypatch):
+    candidate = track("wrong", "Other Song - Live", ["Romanized Artist"], "Album")
+    candidate["external_ids"] = {"isrc": "US-TEST"}
+    called = []
+    monkeypatch.setattr(spotify.requests, "get", lambda *args, **kwargs: called.append(args) or FakeMBResponse({}))
+    assert run_search(monkeypatch, "Song", ["中文艺人"], "Album", [candidate]) is None
+    assert not called

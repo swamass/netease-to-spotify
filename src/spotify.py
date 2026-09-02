@@ -3,6 +3,7 @@ import difflib
 import re
 import time
 import unicodedata
+from typing import Any
 
 import requests
 
@@ -13,6 +14,12 @@ SPOTIFY_API_URL = "https://api.spotify.com/v1"
 MAX_RETRIES = 3
 RETRY_DELAYS = [2, 5, 10]
 MAX_RETRY_AFTER_SECONDS = 15
+MUSICBRAINZ_URL = "https://musicbrainz.org/ws/2"
+MUSICBRAINZ_USER_AGENT = "netease-to-spotify/identity-fallback-v1"
+MUSICBRAINZ_REQUEST_INTERVAL = 1.1
+
+_musicbrainz_cache: dict[tuple[str, str], dict[str, Any] | None] = {}
+_musicbrainz_last_request = 0.0
 
 
 class SpotifyRateLimitError(RuntimeError):
@@ -173,7 +180,7 @@ SAFE_VERSION_TERMS = {
 }
 HARD_VERSION_TERMS = {
     "live", "remix", "remixed", "acoustic", "instrumental", "demo",
-    "radioedit", "extendedmix", "djversion", "speedup", "slowed",
+    "radioedit", "extendedmix", "djversion", "djmixed", "speedup", "slowed",
 }
 INVALID_RELEASE_TERMS = {"tribute", "cover", "karaoke"}
 
@@ -312,6 +319,144 @@ def _artist_matches(
     return score > 0, count
 
 
+def _musicbrainz_get(path: str, params: dict[str, str]) -> dict[str, Any] | None:
+    """Read MusicBrainz conservatively; failures never affect the sync."""
+    global _musicbrainz_last_request
+    cache_key = (path, "&".join(f"{key}={params[key]}" for key in sorted(params)))
+    if cache_key in _musicbrainz_cache:
+        return _musicbrainz_cache[cache_key]
+    wait = MUSICBRAINZ_REQUEST_INTERVAL - (time.monotonic() - _musicbrainz_last_request)
+    if wait > 0:
+        time.sleep(wait)
+    for attempt in range(3):
+        try:
+            response = requests.get(
+                f"{MUSICBRAINZ_URL}/{path.lstrip('/')}",
+                params=params,
+                headers={"User-Agent": MUSICBRAINZ_USER_AGENT, "Accept": "application/json"},
+                timeout=30,
+            )
+            _musicbrainz_last_request = time.monotonic()
+            if response.status_code >= 500:
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+                    continue
+                _musicbrainz_cache[cache_key] = None
+                return None
+            if response.status_code == 404:
+                _musicbrainz_cache[cache_key] = None
+                return None
+            response.raise_for_status()
+            result = response.json()
+            _musicbrainz_cache[cache_key] = result
+            return result
+        except (requests.RequestException, ValueError):
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+                continue
+            _musicbrainz_cache[cache_key] = None
+            return None
+    return None
+
+
+def _musicbrainz_artist_ids(name: str) -> set[str]:
+    if not name:
+        return set()
+    data = _musicbrainz_get(
+        "artist",
+        {"query": f'artist:"{name}"', "fmt": "json", "limit": "5"},
+    )
+    return {
+        artist.get("id")
+        for artist in (data or {}).get("artists", [])
+        if artist.get("id")
+    }
+
+
+def _musicbrainz_artist_identity(
+    source_artists: list[str], spotify_artists: list[dict],
+) -> set[str]:
+    source_ids = set().union(*(_musicbrainz_artist_ids(name) for name in source_artists))
+    spotify_ids = set().union(*(
+        _musicbrainz_artist_ids(artist.get("name", ""))
+        for artist in spotify_artists
+    ))
+    return source_ids & spotify_ids
+
+
+def _musicbrainz_recordings_for_isrc(isrc: str) -> list[dict[str, Any]]:
+    if not isrc:
+        return []
+    data = _musicbrainz_get(f"isrc/{isrc}", {"fmt": "json"})
+    detailed = []
+    for recording in (data or {}).get("recordings", []):
+        mbid = recording.get("id")
+        if not mbid:
+            continue
+        detail = _musicbrainz_get(
+            f"recording/{mbid}",
+            {"fmt": "json", "inc": "artist-credits+releases+isrcs"},
+        )
+        if detail:
+            detailed.append(detail)
+    return detailed
+
+
+def _musicbrainz_artist_identity_supported(
+    source_artists: list[str], candidate: dict,
+) -> bool:
+    candidate_artists = candidate.get("artists", [])
+    if not candidate_artists:
+        return False
+    return bool(_musicbrainz_artist_identity(source_artists, candidate_artists))
+
+
+def _musicbrainz_recording_identity_accepts(
+    source_name: str,
+    source_artists: list[str],
+    source_album: str,
+    candidate: dict,
+) -> bool:
+    """Return true only for strong identity evidence; otherwise fail open."""
+    isrc = (candidate.get("external_ids") or {}).get("isrc")
+    if not isrc:
+        return False
+    if not _title_match(source_name, candidate.get("name", "")):
+        return False
+    if _version_conflicts(
+        source_name, source_album, candidate.get("name", ""),
+        candidate.get("album", {}).get("name", ""),
+    ):
+        return False
+    artist_ids = _musicbrainz_artist_identity(
+        source_artists, candidate.get("artists", [])
+    )
+    if not artist_ids:
+        return False
+    recordings = _musicbrainz_recordings_for_isrc(isrc)
+    if not recordings:
+        return False
+    candidate_duration = _coerce_duration_ms(candidate.get("duration_ms"))
+    best_difference = None
+    for recording in recordings:
+        recording_artist_ids = {
+            credit.get("artist", {}).get("id")
+            for credit in recording.get("artist-credit", [])
+            if credit.get("artist", {}).get("id")
+        }
+        if not artist_ids & recording_artist_ids:
+            continue
+        if not _title_match(source_name, recording.get("title", "")):
+            continue
+        if _version_conflicts(source_name, source_album, recording.get("disambiguation", ""), ""):
+            continue
+        duration = _coerce_duration_ms(recording.get("length"))
+        difference = abs(duration - candidate_duration) if duration and candidate_duration else None
+        if best_difference is None or (difference is not None and difference < best_difference):
+            best_difference = difference
+    return best_difference is None or best_difference <= 30000
+
+
 def _coerce_duration_ms(value) -> int | None:
     try:
         duration_ms = int(value)
@@ -441,15 +586,43 @@ def search_track(
                 duration_ms, item.get("duration_ms")
             )
             title_exact = _normalize_text(_title_core(name)) in _title_keys(item_name)
+            version_reasons = _version_conflicts(
+                name, album, item_name, item_album_name
+            )
+            identity_verified = False
+            if (
+                artist_score == 0.35
+                and not artist_reliable
+                and title_matches
+                and not version_reasons
+            ):
+                artist_identity_supported = _musicbrainz_artist_identity_supported(
+                    artists, item
+                )
+                if artist_identity_supported:
+                    print(
+                        "MusicBrainz artist identity supported candidate: "
+                        f"{item_name} - {item_album_name}"
+                    )
+                    if (item.get("external_ids") or {}).get("isrc"):
+                        identity_verified = _musicbrainz_recording_identity_accepts(
+                            name, artists, album, item
+                        )
+                        print(
+                            "MusicBrainz ISRC recording verification: "
+                            f"{'passed' if identity_verified else 'not confirmed'}"
+                        )
+                    else:
+                        identity_verified = title_exact and (
+                            album_points >= 45 or duration_points >= 40
+                        )
             if artist_score == 0:
                 reasons.append("artist mismatch")
-            elif not artist_reliable and not (
+            elif not artist_reliable and not identity_verified and not (
                 title_exact and album_points >= 45
             ):
                 reasons.append("artist not sufficiently corroborated")
-            reasons.extend(_version_conflicts(
-                name, album, item_name, item_album_name
-            ))
+            reasons.extend(version_reasons)
 
             if reasons:
                 print(
