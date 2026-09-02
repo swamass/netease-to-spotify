@@ -425,12 +425,12 @@ def _musicbrainz_artist_identity(
     source_name = _normalize_text(primary_source)
     confirmed = set()
     for mbid in source_ids:
-        source_aliases = _musicbrainz_artist_names(mbid)
+        source_aliases = _musicbrainz_artist_names(mbid) or set()
         if any(_normalize_text(name) in source_aliases for name in spotify_names):
             confirmed.add(mbid)
     for spotify_name, candidate_ids in spotify_ids_by_name.items():
         for mbid in candidate_ids:
-            candidate_aliases = _musicbrainz_artist_names(mbid)
+            candidate_aliases = _musicbrainz_artist_names(mbid) or set()
             if source_name in candidate_aliases:
                 confirmed.add(mbid)
     return confirmed

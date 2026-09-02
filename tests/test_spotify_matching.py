@@ -538,7 +538,11 @@ def test_musicbrainz_artist_alias_confirms_cross_language_names(monkeypatch):
         "taisei-mbid": {"岩崎太整", "taiseiiwasaki"},
     }
     monkeypatch.setattr(spotify, "_musicbrainz_artist_ids", ids.get)
-    monkeypatch.setattr(spotify, "_musicbrainz_artist_names", aliases.get)
+    monkeypatch.setattr(
+        spotify,
+        "_musicbrainz_artist_names",
+        lambda mbid: aliases.get(mbid, set()),
+    )
     for source, candidate in [
         ("王菲", "Faye Wong"),
         ("薬師丸ひろ子", "Hiroko Yakushimaru"),
@@ -579,6 +583,14 @@ def test_musicbrainz_artist_alias_does_not_cross_confirm_different_mbids(monkeyp
         else {"fayewong", "a7s"},
     )
     assert not spotify._musicbrainz_artist_identity(["王菲"], [{"name": "A7S"}])
+
+
+def test_musicbrainz_artist_names_none_is_not_confirmed(monkeypatch):
+    monkeypatch.setattr(spotify, "_musicbrainz_artist_ids", lambda _name: {"missing-mbid"})
+    monkeypatch.setattr(spotify, "_musicbrainz_artist_names", lambda _mbid: None)
+    assert not spotify._musicbrainz_artist_identity(
+        ["德永英明"], [{"name": "Hideaki Tokunaga"}]
+    )
 
 
 def test_musicbrainz_artist_alias_rejects_unrelated_names(monkeypatch):
