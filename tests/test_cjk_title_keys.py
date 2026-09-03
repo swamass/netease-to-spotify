@@ -33,3 +33,17 @@ def test_converter_failure_falls_back_to_no_match():
         raise RuntimeError("converter unavailable")
 
     assert keys.title_status("最后の言い訳", "最後の言い訳", broken) == keys.NO_MATCH
+
+
+def test_nfkc_compatibility_key_preserves_title_baseline():
+    comparison = keys.comparison_keys("神")
+
+    assert comparison["original"] == comparison["nfkc"]
+    assert keys.title_status("神", "神") == keys.EXACT
+
+
+def test_opencc_key_is_auxiliary_only():
+    comparison = keys.comparison_keys("最后の言い訳", converter)
+
+    assert comparison["original"] == "最后の言い訳"
+    assert comparison["original"] != comparison["cjk"]
