@@ -725,3 +725,85 @@ def test_isrc_alone_does_not_accept_unconfirmed_artist(monkeypatch):
         "Original Album",
         [candidate],
     ) is None
+
+
+def test_musicbrainz_rescues_japanese_title_with_romanized_candidate(monkeypatch):
+    candidate = track("tokai", "Tokai", ["Taeko Onuki"], "SUNSHOWER")
+    candidate.update({
+        "external_ids": {"isrc": "JPCR07700360"},
+        "duration_ms": 310173,
+    })
+
+    def fake_get(url, params, **_kwargs):
+        if url.endswith("/artist"):
+            return FakeMBResponse({"artists": [{"id": "taeko-mbid"}]})
+        if url.endswith("/isrc/JPCR07700360"):
+            return FakeMBResponse({"recordings": [{"id": "normal"}, {"id": "dj"}]})
+        if url.endswith("/recording/dj"):
+            return FakeMBResponse({
+                "id": "dj", "title": "都会", "length": 109000,
+                "artist-credit": [{"artist": {"id": "taeko-mbid"}}],
+                "disambiguation": "DJ-mix",
+            })
+        return FakeMBResponse({
+            "id": "normal", "title": "都会", "length": 310173,
+            "artist-credit": [{"artist": {"id": "taeko-mbid"}}],
+            "disambiguation": "",
+        })
+
+    monkeypatch.setattr(spotify.requests, "get", fake_get)
+    monkeypatch.setattr(spotify.time, "sleep", lambda *_args: None)
+    assert run_search(monkeypatch, "都会", ["大貫妙子"], "Sunshower", [candidate]) == "tokai"
+
+
+def test_cross_script_rescue_requires_musicbrainz_recording_evidence(monkeypatch):
+    candidate = track("tokai", "Tokai", ["Taeko Onuki"], "SUNSHOWER")
+    candidate.update({"external_ids": {"isrc": "JPCR07700360"}, "duration_ms": 310173})
+
+    monkeypatch.setattr(
+        spotify,
+        "_musicbrainz_artist_identity_supported",
+        lambda *_args: True,
+    )
+    monkeypatch.setattr(spotify, "_musicbrainz_recordings_for_isrc", lambda _isrc: [])
+    monkeypatch.setattr(spotify.time, "sleep", lambda *_args: None)
+    assert run_search(monkeypatch, "都会", ["大貫妙子"], "Sunshower", [candidate]) is None
+
+
+def test_cross_script_rescue_does_not_override_version_conflict(monkeypatch):
+    candidate = track("tokai-live", "Tokai - Live", ["Taeko Onuki"], "SUNSHOWER")
+    candidate.update({"external_ids": {"isrc": "JPCR07700360"}, "duration_ms": 310173})
+    calls = []
+    monkeypatch.setattr(spotify, "_musicbrainz_artist_identity_supported", lambda *_args: calls.append(True) or True)
+    monkeypatch.setattr(spotify.time, "sleep", lambda *_args: None)
+    assert run_search(monkeypatch, "都会", ["大貫妙子"], "Sunshower", [candidate]) is None
+    assert calls == []
+
+
+def test_cross_script_rescue_rejects_unconfirmed_artist(monkeypatch):
+    candidate = track("wrong-artist", "Tokai", ["Other Artist"], "SUNSHOWER")
+    candidate.update({"external_ids": {"isrc": "JPCR07700360"}, "duration_ms": 310173})
+    monkeypatch.setattr(spotify, "_musicbrainz_artist_identity_supported", lambda *_args: False)
+    assert run_search(monkeypatch, "都会", ["大貫妙子"], "Sunshower", [candidate]) is None
+
+
+def test_cross_script_rescue_requires_isrc_and_valid_recording_evidence(monkeypatch):
+    candidate = track("tokai", "Tokai", ["Taeko Onuki"], "SUNSHOWER")
+    candidate["duration_ms"] = 310173
+    monkeypatch.setattr(spotify, "_musicbrainz_artist_identity_supported", lambda *_args: True)
+    monkeypatch.setattr(spotify, "_musicbrainz_artist_identity", lambda *_args: {"taeko-mbid"})
+    monkeypatch.setattr(spotify.time, "sleep", lambda *_args: None)
+
+    for recording in [
+        {"id": "wrong-title", "title": "別の曲", "length": 310173,
+         "artist-credit": [{"artist": {"id": "taeko-mbid"}}], "disambiguation": ""},
+        {"id": "wrong-artist", "title": "都会", "length": 310173,
+         "artist-credit": [{"artist": {"id": "other-mbid"}}], "disambiguation": ""},
+        {"id": "wrong-duration", "title": "都会", "length": 109000,
+         "artist-credit": [{"artist": {"id": "taeko-mbid"}}], "disambiguation": ""},
+    ]:
+        monkeypatch.setattr(spotify, "_musicbrainz_recordings_for_isrc", lambda _isrc, item=recording: [item])
+        assert run_search(monkeypatch, "都会", ["大貫妙子"], "Sunshower", [candidate]) is None
+
+    candidate.pop("external_ids", None)
+    assert run_search(monkeypatch, "都会", ["大貫妙子"], "Sunshower", [candidate]) is None

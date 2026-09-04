@@ -468,12 +468,14 @@ def _musicbrainz_recording_identity_accepts(
     source_artists: list[str],
     source_album: str,
     candidate: dict,
+    allow_cross_script_title: bool = False,
 ) -> bool:
     """Return true only for strong identity evidence; otherwise fail open."""
     isrc = (candidate.get("external_ids") or {}).get("isrc")
     if not isrc:
         return False
-    if not _title_match(source_name, candidate.get("name", "")):
+    candidate_name = candidate.get("name", "")
+    if not allow_cross_script_title and not _title_match(source_name, candidate_name):
         return False
     if _version_conflicts(
         source_name, source_album, candidate.get("name", ""),
@@ -501,13 +503,21 @@ def _musicbrainz_recording_identity_accepts(
             continue
         if not _title_match(source_name, recording.get("title", "")):
             continue
-        if _version_conflicts(source_name, source_album, recording.get("disambiguation", ""), ""):
+        disambiguation = recording.get("disambiguation", "")
+        if (
+            _version_conflicts(source_name, source_album, disambiguation, "")
+            or "djmix" in _normalize_text(disambiguation)
+        ):
             continue
         duration = _coerce_duration_ms(recording.get("length"))
         difference = abs(duration - candidate_duration) if duration and candidate_duration else None
         if best_difference is None or (difference is not None and difference < best_difference):
             best_difference = difference
-    confirmed = best_difference is None or best_difference <= 30000
+    confirmed = (
+        best_difference is not None and best_difference <= 30000
+        if allow_cross_script_title
+        else best_difference is None or best_difference <= 30000
+    )
     print(
         "MB ISRC verification: "
         f"isrc={isrc} duration_diff_ms={best_difference} "
@@ -598,6 +608,20 @@ def _musicbrainz_fallback_eligible(
     )
 
 
+def _cross_script_title_rescue_eligible(
+    source_name: str,
+    candidate_name: str,
+    version_reasons: list[str],
+) -> bool:
+    return (
+        not _title_match(source_name, candidate_name)
+        and _contains_cjk(source_name)
+        and not _contains_cjk(candidate_name)
+        and not _contains_kana(candidate_name)
+        and not version_reasons
+    )
+
+
 def search_track(
     access_token: str,
     name: str,
@@ -671,6 +695,9 @@ def search_track(
             version_reasons = _version_conflicts(
                 name, album, item_name, item_album_name
             )
+            cross_script_title_rescue = _cross_script_title_rescue_eligible(
+                name, item_name, version_reasons
+            )
             cjk_status = cjk_title_keys.NO_MATCH
             if not title_matches and not version_reasons:
                 cjk_status = _cjk_title_status(name, item_name)
@@ -709,13 +736,19 @@ def search_track(
                     f"reason=cross-language artist uncertainty "
                     f"spotify_isrc={spotify_isrc or 'NONE'}"
                 )
-            if _musicbrainz_fallback_eligible(
+            fallback_eligible = _musicbrainz_fallback_eligible(
                 baseline_accept,
                 artist_score,
                 artist_reliable,
                 title_matches,
                 version_reasons,
-            ):
+            ) or (
+                cross_script_title_rescue
+                and not baseline_accept
+                and artist_score == 0.35
+                and not artist_reliable
+            )
+            if fallback_eligible:
                 artist_identity_supported = _musicbrainz_artist_identity_supported(
                     artists, item
                 )
@@ -726,7 +759,8 @@ def search_track(
                     )
                     if (item.get("external_ids") or {}).get("isrc"):
                         identity_verified = _musicbrainz_recording_identity_accepts(
-                            name, artists, album, item
+                            name, artists, album, item,
+                            allow_cross_script_title=cross_script_title_rescue,
                         )
                         print(
                             "MusicBrainz ISRC recording verification: "
@@ -736,6 +770,12 @@ def search_track(
                         identity_verified = title_exact and (
                             album_points >= 45 or duration_points >= 40
                         )
+                    if identity_verified and cross_script_title_rescue:
+                        title_matches = True
+                        reasons = [
+                            reason for reason in reasons
+                            if reason != "title mismatch"
+                        ]
             if artist_score == 0:
                 reasons.append("artist mismatch")
             elif not artist_reliable and not identity_verified and not (
