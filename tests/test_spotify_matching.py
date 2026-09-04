@@ -738,15 +738,15 @@ def test_musicbrainz_rescues_japanese_title_with_romanized_candidate(monkeypatch
         if url.endswith("/artist"):
             return FakeMBResponse({"artists": [{"id": "taeko-mbid"}]})
         if url.endswith("/isrc/JPCR07700360"):
-            return FakeMBResponse({"recordings": [{"id": "normal"}, {"id": "dj"}]})
-        if url.endswith("/recording/dj"):
+            return FakeMBResponse({"recordings": [{"id": "tokai-normal"}, {"id": "tokai-dj"}]})
+        if url.endswith("/recording/tokai-dj"):
             return FakeMBResponse({
-                "id": "dj", "title": "都会", "length": 109000,
+                "id": "tokai-dj", "title": "都会", "length": 109000,
                 "artist-credit": [{"artist": {"id": "taeko-mbid"}}],
                 "disambiguation": "DJ-mix",
             })
         return FakeMBResponse({
-            "id": "normal", "title": "都会", "length": 310173,
+            "id": "tokai-normal", "title": "都会", "length": 310173,
             "artist-credit": [{"artist": {"id": "taeko-mbid"}}],
             "disambiguation": "",
         })
