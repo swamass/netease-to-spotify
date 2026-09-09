@@ -259,7 +259,7 @@ def test_search_queries_keep_structured_field_semantics(monkeypatch):
     queries = []
 
     def fake_get(*_args, **kwargs):
-        queries.append(kwargs["params"]["q"])
+        queries.append(_args[2]["q"])
         return FakeResponse([])
 
     monkeypatch.setattr(spotify, "_spotify_get", fake_get)
@@ -274,7 +274,7 @@ def test_first_search_success_does_not_send_second_query(monkeypatch):
     queries = []
 
     def fake_get(*_args, **kwargs):
-        queries.append(kwargs["params"]["q"])
+        queries.append(_args[2]["q"])
         return FakeResponse([track("song", "Song", ["Artist"], "Album")])
 
     monkeypatch.setattr(spotify, "_spotify_get", fake_get)
