@@ -609,6 +609,23 @@ def _version_conflicts(source_name: str, source_album: str,
     return reasons
 
 
+def _is_likely_rendition_project(
+    source_artists: list[str], candidate_artists: list[dict],
+    source_album: str, candidate_name: str, candidate_album: str,
+    album_points: int, title_matches: bool,
+) -> bool:
+    if len(source_artists) != 1 or len(candidate_artists) <= 1:
+        return False
+    if not title_matches or album_points >= 45:
+        return False
+    source_artist = unicodedata.normalize("NFKC", source_artists[0]).casefold().strip()
+    escaped_artist = re.escape(source_artist).replace(r"\ ", r"\W+")
+    context = unicodedata.normalize("NFKC", f"{candidate_name} {candidate_album}").casefold()
+    return re.search(
+        rf"(?:^|[^\w])plays(?:\W+){escaped_artist}(?:$|[^\w])", context
+    ) is not None
+
+
 def _baseline_artist_acceptable(
     artist_score: float,
     artist_reliable: bool,
@@ -755,6 +772,12 @@ def search_track(
             version_reasons = _version_conflicts(
                 name, album, item_name, item_album_name
             )
+            if _is_likely_rendition_project(
+                artists, item_artists, album, item_name, item_album_name,
+                album_points, title_matches,
+            ):
+                reasons.append("likely rendition project")
+                title_matches = False
             if not title_matches and not version_reasons and _feature_title_match(
                 name, item_name, item_artists
             ):

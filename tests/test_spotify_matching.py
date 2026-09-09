@@ -428,6 +428,45 @@ def test_additional_artists_remain_allowed_with_exact_album(monkeypatch):
         assert result == "collab"
 
 
+def test_plays_source_artist_project_is_rejected(monkeypatch):
+    result = run_search(
+        monkeypatch,
+        "Firth Of Fifth",
+        ["Genesis"],
+        "Selling England By the Pound",
+        [track(
+            "rendition", "Firth of Fifth",
+            ["Paolo Chiarandini", "Genesis", "David Myers"],
+            "Paolo Chiarandini Plays Genesis",
+        )],
+    )
+    assert result is None
+
+
+def test_plays_guard_does_not_reject_unrelated_artist_context(monkeypatch):
+    result = run_search(
+        monkeypatch, "Song", ["Artist"], "Album",
+        [track("candidate", "Song", ["Artist", "Other"], "Artist Plays Jazz")],
+    )
+    assert result == "candidate"
+
+
+def test_plays_guard_does_not_apply_to_multi_artist_source(monkeypatch):
+    result = run_search(
+        monkeypatch, "Song", ["Artist", "Guest"], "Album",
+        [track("candidate", "Song", ["Artist", "Guest", "Other"], "Band Plays Artist")],
+    )
+    assert result == "candidate"
+
+
+def test_original_artist_candidate_remains_accepted(monkeypatch):
+    result = run_search(
+        monkeypatch, "Firth Of Fifth", ["Genesis"], "Selling England By the Pound",
+        [track("original", "Firth of Fifth", ["Genesis"], "Selling England By the Pound")],
+    )
+    assert result == "original"
+
+
 def test_weak_artist_case_is_not_made_more_permissive():
     score, _, reliable = spotify._artist_match_score(
         ["麗美"],
