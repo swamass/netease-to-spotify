@@ -2,6 +2,12 @@ name: Spotify Retrieval Benchmark
 
 on:
   workflow_dispatch:
+    inputs:
+      start_index:
+        description: "Zero-based source row to start from"
+        required: false
+        default: "0"
+        type: number
 
 jobs:
   benchmark:
@@ -47,9 +53,12 @@ jobs:
           --access-token "$SPOTIFY_ACCESS_TOKEN"
           --json retrieval_benchmark.json
           --delay-seconds 0.25
+          --start-index ${{ inputs.start_index }}
 
       - name: Upload benchmark report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: spotify-retrieval-benchmark
           path: retrieval_benchmark.json
+          if-no-files-found: error

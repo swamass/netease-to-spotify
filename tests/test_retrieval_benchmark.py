@@ -117,6 +117,42 @@ def test_resolved_mbid_without_alternate_skips_spotify_alias_search(monkeypatch)
     assert len(calls) == 3
 
 
+def test_long_rate_limit_returns_partial_report_without_finishing_row(monkeypatch):
+    calls = []
+    class RateLimit( retrieval_benchmark.spotify.SpotifyRateLimitError):
+        retry_after_seconds = 67776
+    def fake_get(*args):
+        calls.append(args[2])
+        if len(calls) == 1:
+            raise RateLimit("long retry")
+        raise AssertionError("request after rate limit")
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_spotify_get", fake_get)
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_musicbrainz_artist_ids", lambda _name: (_ for _ in ()).throw(AssertionError("MusicBrainz called")))
+    report = retrieval_benchmark.benchmark("token", [
+        {"title": "First", "artist": "Artist"}, {"title": "Second", "artist": "Artist"}
+    ], 0)
+    assert report["tracks"] == []
+    assert report["completed_input_rows"] == 0
+    assert report["stopped_early"] is True
+    assert report["stop_reason"] == "SPOTIFY_RATE_LIMIT"
+    assert report["retry_after_seconds"] == 67776
+    assert report["next_start_index"] == 0
+    assert len(calls) == 1
+
+
+def test_start_index_skips_earlier_rows_and_preserves_original_indexes(monkeypatch):
+    class Response:
+        def json(self):
+            return {"tracks": {"items": []}}
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_spotify_get", lambda *args: Response())
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_musicbrainz_artist_ids", lambda _name: set())
+    songs = [{"title": "One", "artist": "A"}, {"title": "Two", "artist": "B"}, {"title": "Three", "artist": "C"}]
+    report = retrieval_benchmark.benchmark("token", songs, 0, start_index=1)
+    assert [entry["input_index"] for entry in report["tracks"]] == [1, 2]
+    assert report["start_index"] == 1
+    assert report["total_input_rows"] == 3
+
+
 def test_alias_from_ambiguous_other_mbid_is_never_selected(monkeypatch):
     monkeypatch.setattr(
         retrieval_benchmark.spotify, "_musicbrainz_artist_ids",
