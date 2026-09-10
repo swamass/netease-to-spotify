@@ -80,12 +80,43 @@ def _request_key(params: dict) -> tuple:
     return tuple(sorted((key, params.get(key)) for key in ("q", "type", "limit", "offset", "market")))
 
 
+def _ambiguous_artist_field(artist: str) -> bool:
+    return bool(re.search(r"[,/]|\s(?:and|&|with|feat\.?|featuring)\s", artist, re.IGNORECASE))
+
+
+def _artist_alias(source_artist: str, cache: dict) -> dict | None:
+    key = spotify._normalize_text(source_artist)
+    if key in cache:
+        return cache[key]
+    ids = spotify._musicbrainz_artist_ids(source_artist)
+    if len(ids) != 1:
+        cache[key] = None
+        return None
+    mbid = next(iter(ids))
+    data = spotify._musicbrainz_get("artist/" + mbid, {"fmt": "json", "inc": "aliases"})
+    names = spotify._musicbrainz_artist_names(mbid) if data else set()
+    if spotify._normalize_text(source_artist) not in names:
+        cache[key] = None
+        return None
+    display_names = [data.get("name", ""), data.get("sort-name", "")]
+    display_names.extend(alias.get("name", "") for alias in data.get("aliases", []))
+    alternates = [name for name in display_names if name and spotify._normalize_text(name) != key]
+    latin = [name for name in alternates if not any(ord(char) > 127 for char in name)]
+    result = {"mbid": mbid, "canonical_name": data.get("name", ""), "alternate": (latin or alternates or [None])[0]}
+    cache[key] = result if result["alternate"] else None
+    return cache[key]
+
+
 def benchmark(access_token: str, songs: list[dict[str, str]], delay_seconds: float = 0.25) -> dict:
     report = {
         "total": len(songs), "logical_searches": 0,
         "real_spotify_searches": 0, "cache_hits": 0, "tracks": [],
+        "alias_attempted": 0, "alias_skipped": 0,
+        "alias_spotify_candidates_found": 0, "alias_zero_candidates": 0,
+        "alias_matcher_accepted": 0, "unique_musicbrainz_artist_lookups": 0,
     }
     cache = {}
+    artist_cache = {}
     for song in songs:
         entry = {"source_title": song["title"], "source_artist": song["artist"], "strategies": {}}
         for strategy, params in build_queries(song).items():
@@ -111,6 +142,45 @@ def benchmark(access_token: str, songs: list[dict[str, str]], delay_seconds: flo
                 "candidate_count": len(candidates), "candidates": candidates,
                 "cache_hit": reused,
                 "accepted_track_ids": _matcher_accepts(access_token, song, items),
+            }
+        if entry["strategies"]["structured_page_0"]["candidate_count"] == 0:
+            if _ambiguous_artist_field(song["artist"]):
+                report["alias_skipped"] += 1
+                entry["strategies"]["artist_alias"] = {"skipped": True, "reason": "ambiguous multi-artist input"}
+                report["tracks"].append(entry)
+                continue
+            alias = _artist_alias(song["artist"], artist_cache)
+            report["unique_musicbrainz_artist_lookups"] = len(artist_cache)
+            if not alias:
+                report["alias_skipped"] += 1
+                entry["strategies"]["artist_alias"] = {"skipped": True, "reason": "MusicBrainz unavailable, ambiguous, or no alternate"}
+                report["tracks"].append(entry)
+                continue
+            report["alias_attempted"] += 1
+            alias_query = f'track:"{spotify._spotify_query_value(song["title"])}" artist:"{spotify._spotify_query_value(alias["alternate"])}"'
+            alias_params = {"q": alias_query, "type": "track", "limit": 10, "offset": 0}
+            alias_key = _request_key(alias_params)
+            reused = alias_key in cache
+            if reused:
+                alias_response = cache[alias_key]
+                report["cache_hits"] += 1
+            else:
+                if report["real_spotify_searches"] and delay_seconds > 0:
+                    time.sleep(delay_seconds)
+                alias_response = spotify._spotify_get(f"{spotify.SPOTIFY_API_URL}/search", access_token, alias_params)
+                cache[alias_key] = alias_response
+                report["real_spotify_searches"] += 1
+            alias_items = _response_items(alias_response)
+            accepted = _matcher_accepts(access_token, song, alias_items)
+            report["alias_spotify_candidates_found"] += bool(alias_items)
+            report["alias_zero_candidates"] += not bool(alias_items)
+            report["alias_matcher_accepted"] += bool(accepted)
+            entry["strategies"]["artist_alias"] = {
+                "source_artist": song["artist"], "mbid": alias["mbid"],
+                "canonical_artist": alias["canonical_name"], "alternate_artist": alias["alternate"],
+                "query": alias_query, "offset": 0, "candidate_count": len(alias_items),
+                "candidates": [_candidate(item, index) for index, item in enumerate(alias_items, 1)],
+                "cache_hit": reused, "accepted_track_ids": accepted,
             }
         report["tracks"].append(entry)
     return report

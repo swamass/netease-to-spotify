@@ -22,6 +22,7 @@ def test_benchmark_uses_offsets_and_never_playlist_writes(monkeypatch):
             return {"tracks": {"items": []}}
 
     monkeypatch.setattr(retrieval_benchmark.spotify, "_spotify_get", lambda *args: calls.append(args[2]) or Response())
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_musicbrainz_artist_ids", lambda _name: set())
     report = retrieval_benchmark.benchmark("token", [{"title": "Song", "artist": "Artist"}])
     assert [call["offset"] for call in calls] == [0, 10, 0]
     assert report["tracks"][0]["strategies"]["track_only"]["candidate_count"] == 0
@@ -45,6 +46,80 @@ def test_delay_applies_only_to_real_requests(monkeypatch):
         def json(self):
             return {"tracks": {"items": []}}
     monkeypatch.setattr(retrieval_benchmark.spotify, "_spotify_get", lambda *args: Response())
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_musicbrainz_artist_ids", lambda _name: set())
     monkeypatch.setattr(retrieval_benchmark.time, "sleep", lambda seconds: sleeps.append(seconds))
     retrieval_benchmark.benchmark("token", [{"title": "Song", "artist": "Artist"}], 0.25)
     assert sleeps == [0.25, 0.25]
+
+
+def test_artist_alias_uses_same_mbid_and_original_title(monkeypatch):
+    calls = []
+    class Response:
+        def json(self):
+            return {"tracks": {"items": []}}
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_spotify_get", lambda *args: calls.append(args[2]) or Response())
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_musicbrainz_artist_ids", lambda name: {"mbid"} if name == "角松敏生" else set())
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_musicbrainz_artist_names", lambda _mbid: {"角松敏生", "toshiki kadomatsu"})
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_musicbrainz_get", lambda *_args: {"name": "角松敏生", "aliases": [{"name": "Toshiki Kadomatsu"}]})
+    report = retrieval_benchmark.benchmark("token", [{"title": "曲名", "artist": "角松敏生"}], 0)
+    alias = report["tracks"][0]["strategies"]["artist_alias"]
+    assert alias["mbid"] == "mbid"
+    assert alias["alternate_artist"] == "Toshiki Kadomatsu"
+    assert 'track:"曲名" artist:"Toshiki Kadomatsu"' == alias["query"]
+
+
+def test_ambiguous_or_unavailable_artist_alias_is_skipped(monkeypatch):
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_musicbrainz_artist_ids", lambda _name: set())
+    report = retrieval_benchmark.benchmark("token", [{"title": "Song", "artist": "Artist / Guest"}], 0)
+    assert report["tracks"][0]["strategies"]["artist_alias"]["skipped"] is True
+
+
+def test_repeated_source_artist_reuses_musicbrainz_cache(monkeypatch):
+    lookups = []
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_musicbrainz_artist_ids", lambda name: lookups.append(name) or {"mbid"})
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_musicbrainz_artist_names", lambda _mbid: {"角松敏生", "toshiki kadomatsu"})
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_musicbrainz_get", lambda *_args: {"name": "角松敏生", "aliases": [{"name": "Toshiki Kadomatsu"}]})
+    class Response:
+        def json(self):
+            return {"tracks": {"items": []}}
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_spotify_get", lambda *args: Response())
+    report = retrieval_benchmark.benchmark("token", [
+        {"title": "One", "artist": "角松敏生"},
+        {"title": "Two", "artist": "角松敏生"},
+    ], 0)
+    assert lookups == ["角松敏生"]
+    assert report["unique_musicbrainz_artist_lookups"] == 1
+
+
+def test_existing_structured_candidates_skip_musicbrainz_alias_lookup(monkeypatch):
+    lookups = []
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_musicbrainz_artist_ids", lambda name: lookups.append(name) or {"mbid"})
+    class Response:
+        def json(self):
+            return {"tracks": {"items": [{"id": "track", "name": "Song", "artists": [{"name": "Artist"}], "album": {"name": "Album"}}]}}
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_spotify_get", lambda *args: Response())
+    report = retrieval_benchmark.benchmark("token", [{"title": "Song", "artist": "Artist"}], 0)
+    assert lookups == []
+    assert "artist_alias" not in report["tracks"][0]["strategies"]
+
+
+def test_resolved_mbid_without_alternate_skips_spotify_alias_search(monkeypatch):
+    calls = []
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_musicbrainz_artist_ids", lambda _name: {"mbid"})
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_musicbrainz_artist_names", lambda _mbid: {"角松敏生"})
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_musicbrainz_get", lambda *_args: {"name": "角松敏生", "aliases": []})
+    class Response:
+        def json(self):
+            return {"tracks": {"items": []}}
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_spotify_get", lambda *args: calls.append(args[2]["q"]) or Response())
+    report = retrieval_benchmark.benchmark("token", [{"title": "曲名", "artist": "角松敏生"}], 0)
+    assert report["tracks"][0]["strategies"]["artist_alias"]["skipped"] is True
+    assert len(calls) == 3
+
+
+def test_alias_from_ambiguous_other_mbid_is_never_selected(monkeypatch):
+    monkeypatch.setattr(
+        retrieval_benchmark.spotify, "_musicbrainz_artist_ids",
+        lambda _name: {"source-mbid", "other-mbid"},
+    )
+    assert retrieval_benchmark._artist_alias("角松敏生", {}) is None
