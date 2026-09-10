@@ -3,6 +3,7 @@
 import argparse
 import json
 import re
+import time
 from pathlib import Path
 
 from . import spotify
@@ -75,19 +76,40 @@ def _matcher_accepts(access_token: str, song: dict[str, str], items: list[dict])
         spotify._musicbrainz_get = original_mb_get
 
 
-def benchmark(access_token: str, songs: list[dict[str, str]]) -> dict:
-    report = {"total": len(songs), "tracks": [], "strategies": {}}
+def _request_key(params: dict) -> tuple:
+    return tuple(sorted((key, params.get(key)) for key in ("q", "type", "limit", "offset", "market")))
+
+
+def benchmark(access_token: str, songs: list[dict[str, str]], delay_seconds: float = 0.25) -> dict:
+    report = {
+        "total": len(songs), "logical_searches": 0,
+        "real_spotify_searches": 0, "cache_hits": 0, "tracks": [],
+    }
+    cache = {}
     for song in songs:
         entry = {"source_title": song["title"], "source_artist": song["artist"], "strategies": {}}
         for strategy, params in build_queries(song).items():
-            response = spotify._spotify_get(
-                f"{spotify.SPOTIFY_API_URL}/search", access_token, {"q": params["q"], "type": "track", "limit": 10, "offset": params["offset"]}
-            )
+            report["logical_searches"] += 1
+            request_params = {"q": params["q"], "type": "track", "limit": params["limit"], "offset": params["offset"]}
+            key = _request_key(request_params)
+            reused = key in cache
+            if reused:
+                response = cache[key]
+                report["cache_hits"] += 1
+            else:
+                if report["real_spotify_searches"] and delay_seconds > 0:
+                    time.sleep(delay_seconds)
+                response = spotify._spotify_get(
+                    f"{spotify.SPOTIFY_API_URL}/search", access_token, request_params
+                )
+                cache[key] = response
+                report["real_spotify_searches"] += 1
             items = _response_items(response)
             candidates = [_candidate(item, index) for index, item in enumerate(items, 1)]
             entry["strategies"][strategy] = {
                 "query": params["q"], "offset": params["offset"],
                 "candidate_count": len(candidates), "candidates": candidates,
+                "cache_hit": reused,
                 "accepted_track_ids": _matcher_accepts(access_token, song, items),
             }
         report["tracks"].append(entry)
@@ -106,9 +128,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Read-only Spotify retrieval benchmark")
     parser.add_argument("input", help="UTF-8 file containing TITLE - ARTIST lines")
     parser.add_argument("--access-token", required=True)
+    parser.add_argument("--delay-seconds", type=float, default=0.25)
     parser.add_argument("--json", default="retrieval_benchmark.json")
     args = parser.parse_args()
-    report = benchmark(args.access_token, parse_lines(args.input))
+    report = benchmark(args.access_token, parse_lines(args.input), args.delay_seconds)
     Path(args.json).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print_summary(report)
     print(f"JSON report: {args.json}")
