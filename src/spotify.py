@@ -160,6 +160,10 @@ def _normalize_text(value: str) -> str:
     return "".join(character for character in normalized if character.isalnum())
 
 
+def _spotify_query_value(value: str) -> str:
+    return re.sub(r"\s+", " ", value.replace('"', " ")).strip()
+
+
 ARTIST_ALIASES = {
     "久石譲": ["Joe Hisaishi"],
     "山下達郎": ["Tatsuro Yamashita"],
@@ -705,11 +709,13 @@ def search_track(
             "signals": [],
         })
 
-    artist = artists[0]
+    query_name = _spotify_query_value(name)
+    query_artist = _spotify_query_value(artists[0])
+    query_album = _spotify_query_value(album)
     queries = [
-        f'track:"{name}" artist:"{artist}"'
-        + (f' album:"{album}"' if album else ""),
-        f'track:"{name}" artist:"{artist}"',
+        f'track:"{query_name}" artist:"{query_artist}"'
+        + (f' album:"{query_album}"' if query_album else ""),
+        f'track:"{query_name}" artist:"{query_artist}"',
     ]
     candidates = {}
     requests_sent = 0

@@ -270,6 +270,29 @@ def test_search_queries_keep_structured_field_semantics(monkeypatch):
     ]
 
 
+def test_spotify_query_value_sanitizes_quotes_only():
+    assert spotify._spotify_query_value('No More "I Love You\'s"') == "No More I Love You's"
+    assert spotify._spotify_query_value('“Curly” Artist') == '“Curly” Artist'
+    assert spotify._spotify_query_value("  Ordinary  Artist  ") == "Ordinary Artist"
+
+
+def test_structured_queries_sanitize_title_artist_and_album(monkeypatch):
+    queries = []
+
+    def fake_get(*args, **kwargs):
+        queries.append(args[2]["q"])
+        return FakeResponse([])
+
+    monkeypatch.setattr(spotify, "_spotify_get", fake_get)
+    assert spotify.search_track(
+        "test-token", 'No More "I Love You\'s"', ['Annie "Lennox'], '"Medusa"'
+    ) is None
+    assert queries == [
+        'track:"No More I Love You\'s" artist:"Annie Lennox" album:"Medusa"',
+        'track:"No More I Love You\'s" artist:"Annie Lennox"',
+    ]
+
+
 def test_first_search_success_does_not_send_second_query(monkeypatch):
     queries = []
 
