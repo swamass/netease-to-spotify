@@ -98,7 +98,7 @@ def _artist_alias(source_artist: str, cache: dict) -> dict | None:
     if spotify._normalize_text(source_artist) not in names:
         cache[key] = None
         return None
-    display_names = [data.get("name", ""), data.get("sort-name", "")]
+    display_names = [data.get("name", "")]
     display_names.extend(alias.get("name", "") for alias in data.get("aliases", []))
     alternates = [name for name in display_names if name and spotify._normalize_text(name) != key]
     latin = [name for name in alternates if not any(ord(char) > 127 for char in name)]
@@ -213,7 +213,10 @@ def print_summary(report: dict) -> None:
     for entry in report["tracks"]:
         print(f"\n{entry['source_title']} - {entry['source_artist']}")
         for name, result in entry["strategies"].items():
-            print(f"  {name}: {result['candidate_count']} candidates")
+            if result.get("skipped"):
+                print(f"  {name}: skipped ({result.get('reason', 'no reason')})")
+            else:
+                print(f"  {name}: {result.get('candidate_count', 0)} candidates")
 
 
 def main() -> None:

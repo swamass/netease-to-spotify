@@ -60,12 +60,30 @@ def test_artist_alias_uses_same_mbid_and_original_title(monkeypatch):
     monkeypatch.setattr(retrieval_benchmark.spotify, "_spotify_get", lambda *args: calls.append(args[2]) or Response())
     monkeypatch.setattr(retrieval_benchmark.spotify, "_musicbrainz_artist_ids", lambda name: {"mbid"} if name == "角松敏生" else set())
     monkeypatch.setattr(retrieval_benchmark.spotify, "_musicbrainz_artist_names", lambda _mbid: {"角松敏生", "toshiki kadomatsu"})
-    monkeypatch.setattr(retrieval_benchmark.spotify, "_musicbrainz_get", lambda *_args: {"name": "角松敏生", "aliases": [{"name": "Toshiki Kadomatsu"}]})
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_musicbrainz_get", lambda *_args: {"name": "角松敏生", "sort-name": "Kadomatsu, Toshiki", "aliases": [{"name": "Toshiki Kadomatsu"}]})
     report = retrieval_benchmark.benchmark("token", [{"title": "曲名", "artist": "角松敏生"}], 0)
     alias = report["tracks"][0]["strategies"]["artist_alias"]
     assert alias["mbid"] == "mbid"
     assert alias["alternate_artist"] == "Toshiki Kadomatsu"
     assert 'track:"曲名" artist:"Toshiki Kadomatsu"' == alias["query"]
+
+
+def test_sort_name_alone_is_not_invented_as_display_alias(monkeypatch):
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_musicbrainz_artist_ids", lambda _name: {"mbid"})
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_musicbrainz_artist_names", lambda _mbid: {"角松敏生", "kadomatsu,toshiki"})
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_musicbrainz_get", lambda *_args: {"name": "角松敏生", "sort-name": "Kadomatsu, Toshiki", "aliases": []})
+    assert retrieval_benchmark._artist_alias("角松敏生", {}) is None
+
+
+def test_print_summary_handles_skipped_artist_alias(capsys):
+    retrieval_benchmark.print_summary({
+        "total": 1,
+        "tracks": [{
+            "source_title": "Song", "source_artist": "Artist",
+            "strategies": {"artist_alias": {"skipped": True, "reason": "ambiguous"}},
+        }],
+    })
+    assert "artist_alias: skipped (ambiguous)" in capsys.readouterr().out
 
 
 def test_ambiguous_or_unavailable_artist_alias_is_skipped(monkeypatch):
