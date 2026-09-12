@@ -657,6 +657,63 @@ def test_musicbrainz_artist_alias_confirms_cross_language_names(monkeypatch):
         )
 
 
+def test_musicbrainz_artist_field_query_success_skips_fallback(monkeypatch):
+    queries = []
+    monkeypatch.setattr(
+        spotify,
+        "_musicbrainz_get",
+        lambda _path, params: queries.append(params["query"]) or {"artists": [{"id": "mbid"}]},
+    )
+    assert spotify._musicbrainz_artist_ids("Artist") == {"mbid"}
+    assert queries == ['artist:"Artist"']
+
+
+def test_musicbrainz_artist_fallback_accepts_exact_canonical_and_alias(monkeypatch):
+    responses = [
+        {"artists": []},
+        {"artists": [{"id": "canonical", "name": "Mai Yamane", "aliases": []}]},
+        {"artists": []},
+        {"artists": [{"id": "alias", "name": "山根麻以", "aliases": [{"name": "Mai Yamane"}]}]},
+    ]
+    queries = []
+    monkeypatch.setattr(
+        spotify,
+        "_musicbrainz_get",
+        lambda _path, params: queries.append(params["query"]) or responses.pop(0),
+    )
+    assert spotify._musicbrainz_artist_ids("Mai Yamane") == {"canonical"}
+    assert spotify._musicbrainz_artist_ids("Mai Yamane") == {"alias"}
+    assert queries == ['artist:"Mai Yamane"', "Mai Yamane", 'artist:"Mai Yamane"', "Mai Yamane"]
+
+
+def test_musicbrainz_artist_fallback_rejects_unrelated_and_ambiguous_results(monkeypatch):
+    responses = [
+        {"artists": []},
+        {"artists": [{"id": "other", "name": "Other Artist", "aliases": []}]},
+        {"artists": []},
+        {"artists": [
+            {"id": "one", "name": "Artist", "aliases": []},
+            {"id": "two", "name": "Artist", "aliases": []},
+        ]},
+    ]
+    monkeypatch.setattr(spotify, "_musicbrainz_get", lambda *_args: responses.pop(0))
+    assert spotify._musicbrainz_artist_ids("Mai Yamane") == set()
+    assert spotify._musicbrainz_artist_ids("Artist") == {"one", "two"}
+
+
+def test_musicbrainz_artist_fallback_resolves_mai_yamane_entity(monkeypatch):
+    entity = "60c2af61-346e-4697-9926-f95d195ee02e"
+    responses = {
+        'artist:"山根麻以"': {"artists": [{"id": entity, "name": "山根麻以"}]},
+        'artist:"Mai Yamane"': {"artists": []},
+        "Mai Yamane": {"artists": [{"id": entity, "name": "山根麻以", "aliases": [{"name": "Mai Yamane"}]}]},
+    }
+    monkeypatch.setattr(spotify, "_musicbrainz_get", lambda _path, params: responses[params["query"]])
+    assert spotify._musicbrainz_artist_identity(
+        ["山根麻以"], [{"name": "Mai Yamane"}]
+    ) == {entity}
+
+
 def test_musicbrainz_artist_alias_works_when_only_spotify_search_recalls_mbid(monkeypatch):
     monkeypatch.setattr(
         spotify,

@@ -407,14 +407,33 @@ def _musicbrainz_get(path: str, params: dict[str, str]) -> dict[str, Any] | None
 def _musicbrainz_artist_ids(name: str) -> set[str]:
     if not name:
         return set()
-    data = _musicbrainz_get(
+    field_data = _musicbrainz_get(
         "artist",
         {"query": f'artist:"{name}"', "fmt": "json", "limit": "5"},
     )
+    field_ids = {
+        artist.get("id")
+        for artist in (field_data or {}).get("artists", [])
+        if artist.get("id")
+    }
+    if field_ids:
+        return field_ids
+    fallback_data = _musicbrainz_get(
+        "artist", {"query": name, "fmt": "json", "limit": "5"}
+    )
+    normalized_name = _normalize_text(name)
     return {
         artist.get("id")
-        for artist in (data or {}).get("artists", [])
-        if artist.get("id")
+        for artist in (fallback_data or {}).get("artists", [])
+        if artist.get("id") and normalized_name in {
+            _normalize_text(value)
+            for value in [
+                artist.get("name", ""),
+                artist.get("sort-name", ""),
+                *(alias.get("name", "") for alias in artist.get("aliases", [])),
+            ]
+            if value
+        }
     }
 
 
