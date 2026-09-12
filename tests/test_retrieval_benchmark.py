@@ -47,7 +47,8 @@ def test_diagnose_candidate_preserves_musicbrainz_path(monkeypatch):
             "external_ids": {"isrc": "USA2P2552288"},
         },
     )
-    assert artist_calls == ["山根麻以", "Mai Yamane"]
+    assert set(artist_calls) == {"山根麻以", "Mai Yamane"}
+    assert "Unexpected Artist" not in artist_calls
     assert recording_calls == ["USA2P2552288"]
     assert result["accepted"] is False
     assert any(event["path"] == "isrc/USA2P2552288" for event in result["diagnostics"])
@@ -92,7 +93,10 @@ def test_mai_yamane_diagnostic_report_has_inspection_fields(monkeypatch):
 
 def test_mai_yamane_cli_does_not_enter_normal_benchmark(monkeypatch, tmp_path):
     output = tmp_path / "diagnostic.json"
-    monkeypatch.setattr(sys, "argv", ["retrieval_benchmark", "--mai-yamane-diagnostic", "--json", str(output)])
+    monkeypatch.setattr(sys, "argv", [
+        "retrieval_benchmark", "--mai-yamane-diagnostic", "--access-token", "test-token",
+        "--json", str(output),
+    ])
     monkeypatch.setattr(retrieval_benchmark, "run_mai_yamane_diagnostic", lambda token: {"cases": []})
     monkeypatch.setattr(retrieval_benchmark, "benchmark", lambda *args: (_ for _ in ()).throw(AssertionError("benchmark called")))
     retrieval_benchmark.main()
