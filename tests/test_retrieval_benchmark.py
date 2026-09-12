@@ -1,4 +1,102 @@
+import json
+import sys
+
 from src import retrieval_benchmark
+
+
+def test_artist_identity_status_does_not_confuse_not_confirmed():
+    assert retrieval_benchmark._artist_identity_status([
+        "MB artist identity: identity=NOT_CONFIRMED"
+    ]) == "NOT_CONFIRMED"
+    assert retrieval_benchmark._artist_identity_status([
+        "MB artist identity: identity=CONFIRMED"
+    ]) == "CONFIRMED"
+
+
+def test_diagnose_candidate_preserves_musicbrainz_path(monkeypatch):
+    artist_calls = []
+    recording_calls = []
+    monkeypatch.setattr(
+        retrieval_benchmark.spotify,
+        "_spotify_get",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        retrieval_benchmark.spotify,
+        "_musicbrainz_artist_ids",
+        lambda name: artist_calls.append(name) or {"artist-mbid"},
+    )
+    monkeypatch.setattr(
+        retrieval_benchmark.spotify,
+        "_musicbrainz_artist_names",
+        lambda _mbid: {"山根麻以", "mai yamane"},
+    )
+    monkeypatch.setattr(
+        retrieval_benchmark.spotify,
+        "_musicbrainz_recordings_for_isrc",
+        lambda isrc: recording_calls.append(isrc) or [],
+    )
+    result = retrieval_benchmark.diagnose_candidate_with_musicbrainz(
+        "token",
+        {"title": "Wave", "artist": "山根麻以"},
+        {
+            "id": "wave-id",
+            "name": "Wave",
+            "artists": [{"name": "Mai Yamane"}],
+            "album": {"name": "Wave"},
+            "external_ids": {"isrc": "USA2P2552288"},
+        },
+    )
+    assert artist_calls == ["山根麻以", "Mai Yamane"]
+    assert recording_calls == ["USA2P2552288"]
+    assert result["accepted"] is False
+    assert any(event["path"] == "isrc/USA2P2552288" for event in result["diagnostics"])
+
+
+def test_mai_yamane_diagnostic_contains_only_two_cases(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        retrieval_benchmark,
+        "diagnose_candidate_with_musicbrainz",
+        lambda token, song, candidate: seen.append((song, candidate)) or {"accepted": False},
+    )
+    report = retrieval_benchmark.run_mai_yamane_diagnostic()
+    assert len(report["cases"]) == 2
+    assert [song["title"] for song, _ in seen] == ["たそがれ (Twilight)", "Wave"]
+    assert [candidate["external_ids"]["isrc"] for _, candidate in seen] == [
+        "USA2P2544106", "USA2P2552288"
+    ]
+
+
+def test_mai_yamane_diagnostic_uses_no_spotify_search(monkeypatch):
+    monkeypatch.setattr(
+        retrieval_benchmark.spotify,
+        "_spotify_get",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("Spotify called")),
+    )
+    monkeypatch.setattr(retrieval_benchmark, "diagnose_candidate_with_musicbrainz", lambda *args: {"accepted": False})
+    assert len(retrieval_benchmark.run_mai_yamane_diagnostic()["cases"]) == 2
+
+
+def test_mai_yamane_diagnostic_report_has_inspection_fields(monkeypatch):
+    monkeypatch.setattr(
+        retrieval_benchmark,
+        "diagnose_candidate_with_musicbrainz",
+        lambda *args: {"accepted": False, "artist_identity": {"result": "NOT_CONFIRMED"}, "recordings": []},
+    )
+    report = retrieval_benchmark.run_mai_yamane_diagnostic()
+    json.dumps(report, ensure_ascii=False)
+    assert len(report["cases"]) == 2
+    assert {"accepted", "artist_identity", "recordings"} <= report["cases"][0].keys()
+
+
+def test_mai_yamane_cli_does_not_enter_normal_benchmark(monkeypatch, tmp_path):
+    output = tmp_path / "diagnostic.json"
+    monkeypatch.setattr(sys, "argv", ["retrieval_benchmark", "--mai-yamane-diagnostic", "--json", str(output)])
+    monkeypatch.setattr(retrieval_benchmark, "run_mai_yamane_diagnostic", lambda token: {"cases": []})
+    monkeypatch.setattr(retrieval_benchmark, "benchmark", lambda *args: (_ for _ in ()).throw(AssertionError("benchmark called")))
+    retrieval_benchmark.main()
+    assert json.loads(output.read_text(encoding="utf-8")) == {"cases": []}
 
 
 def test_parse_lines_uses_last_separator(tmp_path):

@@ -1,0 +1,24 @@
+name: Mai Yamane Matcher Diagnostic
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - run: |
+          python -m src.retrieval_benchmark \
+            --mai-yamane-diagnostic \
+            --access-token diagnostic \
+            --json mai_yamane_diagnostic.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mai-yamane-matcher-diagnostic
+          path: mai_yamane_diagnostic.json

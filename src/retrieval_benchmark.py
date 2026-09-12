@@ -1,9 +1,11 @@
 """Read-only Spotify retrieval benchmark; never writes playlists."""
 
 import argparse
+import contextlib
 import json
 import re
 import time
+from io import StringIO
 from pathlib import Path
 
 from . import spotify
@@ -74,6 +76,118 @@ def _matcher_accepts(access_token: str, song: dict[str, str], items: list[dict])
     finally:
         spotify._spotify_get = original_get
         spotify._musicbrainz_get = original_mb_get
+
+
+def diagnose_candidate_with_musicbrainz(
+    access_token: str, song: dict[str, str], candidate: dict
+) -> dict:
+    """Evaluate one supplied candidate with real MusicBrainz lookups enabled."""
+    class Response:
+        def json(self):
+            return {"tracks": {"items": [candidate]}}
+
+    events = []
+    original_spotify_get = spotify._spotify_get
+    original_artist_ids = spotify._musicbrainz_artist_ids
+    original_artist_names = spotify._musicbrainz_artist_names
+    original_recordings = spotify._musicbrainz_recordings_for_isrc
+
+    def artist_ids(name):
+        result = original_artist_ids(name)
+        events.append({"path": "artist", "name": name, "ids": sorted(result)})
+        return result
+
+    def artist_names(mbid):
+        result = original_artist_names(mbid)
+        events.append({"path": f"artist/{mbid}", "mbid": mbid, "names": sorted(result)})
+        return result
+
+    def recordings(isrc):
+        result = original_recordings(isrc)
+        events.append({
+            "path": f"isrc/{isrc}",
+            "isrc": isrc,
+            "recordings": [
+                {
+                    "id": item.get("id"),
+                    "title": item.get("title", ""),
+                    "artist_credits": [
+                        {
+                            "name": credit.get("artist", {}).get("name", ""),
+                            "mbid": credit.get("artist", {}).get("id"),
+                        }
+                        for credit in item.get("artist-credit", [])
+                    ],
+                    "duration_ms": item.get("length"),
+                    "disambiguation": item.get("disambiguation", ""),
+                }
+                for item in result
+            ],
+        })
+        return result
+
+    output = StringIO()
+    try:
+        spotify._spotify_get = lambda *_args, **_kwargs: Response()
+        spotify._musicbrainz_artist_ids = artist_ids
+        spotify._musicbrainz_artist_names = artist_names
+        spotify._musicbrainz_recordings_for_isrc = recordings
+        with contextlib.redirect_stdout(output):
+            accepted = spotify.search_track(
+                access_token, song["title"], [song["artist"]], "",
+            )
+    finally:
+        spotify._spotify_get = original_spotify_get
+        spotify._musicbrainz_artist_ids = original_artist_ids
+        spotify._musicbrainz_artist_names = original_artist_names
+        spotify._musicbrainz_recordings_for_isrc = original_recordings
+    output_lines = output.getvalue().splitlines()
+    artist_events = [event for event in events if event["path"] == "artist"]
+    recording_event = next((event for event in events if event["path"].startswith("isrc/")), None)
+    identity_status = _artist_identity_status(output_lines)
+    artist_score, artist_reliable, _ = spotify._artist_match_score(
+        [song["artist"]], candidate.get("artists", [])
+    )
+    return {
+        "source_title": song["title"],
+        "source_artist": song["artist"],
+        "candidate": _candidate(candidate, 1),
+        "title_match": spotify._title_match(song["title"], candidate.get("name", "")),
+        "artist_score": artist_score,
+        "artist_reliable": artist_reliable,
+        "artist_identity": {
+            "result": identity_status,
+            "mbids": sorted({mbid for event in artist_events for mbid in event["ids"]}),
+        },
+        "isrc_recording_lookup_ran": recording_event is not None,
+        "recordings": recording_event["recordings"] if recording_event else [],
+        "version_conflicts": spotify._version_conflicts(
+            song["title"], "", candidate.get("name", ""),
+            candidate.get("album", {}).get("name", ""),
+        ),
+        "accepted": bool(accepted),
+        "spotify_track_id": accepted,
+        "diagnostics": events,
+        "matcher_output": output_lines,
+    }
+
+
+def _artist_identity_status(output_lines: list[str]) -> str:
+    for line in output_lines:
+        if not line.startswith("MB artist identity:"):
+            continue
+        status = line.rsplit("identity=", 1)[-1].strip()
+        if status in {"CONFIRMED", "NOT_CONFIRMED", "NOT_FOUND", "UNAVAILABLE"}:
+            return status
+    return "UNAVAILABLE"
+
+
+def run_mai_yamane_diagnostic(access_token: str = "diagnostic") -> dict:
+    cases = [
+        ({"title": "たそがれ (Twilight)", "artist": "山根麻以"}, {"id": "mai-yamane-tasogare", "name": "Tasogare - Mai Yamane", "artists": [{"name": "Mai Yamane"}], "album": {"name": "Mai Yamane"}, "external_ids": {"isrc": "USA2P2544106"}}),
+        ({"title": "Wave", "artist": "山根麻以"}, {"id": "mai-yamane-wave", "name": "Wave", "artists": [{"name": "Mai Yamane"}], "album": {"name": "Wave"}, "external_ids": {"isrc": "USA2P2552288"}}),
+    ]
+    return {"cases": [diagnose_candidate_with_musicbrainz(access_token, song, candidate) for song, candidate in cases]}
 
 
 def _request_key(params: dict) -> tuple:
@@ -221,12 +335,22 @@ def print_summary(report: dict) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Read-only Spotify retrieval benchmark")
-    parser.add_argument("input", help="UTF-8 file containing TITLE - ARTIST lines")
+    parser.add_argument("input", nargs="?", help="UTF-8 file containing TITLE - ARTIST lines")
     parser.add_argument("--access-token", required=True)
     parser.add_argument("--delay-seconds", type=float, default=0.25)
     parser.add_argument("--start-index", type=int, default=0)
     parser.add_argument("--json", default="retrieval_benchmark.json")
+    parser.add_argument("--mai-yamane-diagnostic", action="store_true")
     args = parser.parse_args()
+    if args.mai_yamane_diagnostic:
+        report = run_mai_yamane_diagnostic(args.access_token)
+        Path(args.json).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        for case in report["cases"]:
+            print(f"{case['source_title']} -> {case['candidate']['title']}: {'MATCH' if case['accepted'] else 'REJECT'}")
+        print(f"JSON report: {args.json}")
+        return
+    if not args.input:
+        parser.error("the following arguments are required: input")
     report = benchmark(args.access_token, parse_lines(args.input), args.delay_seconds, args.start_index)
     Path(args.json).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print_summary(report)
