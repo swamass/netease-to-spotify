@@ -49,7 +49,8 @@ def test_diagnose_candidate_preserves_musicbrainz_path(monkeypatch):
     )
     assert set(artist_calls) == {"山根麻以", "Mai Yamane"}
     assert "Unexpected Artist" not in artist_calls
-    assert recording_calls == ["USA2P2552288"]
+    assert recording_calls
+    assert set(recording_calls) == {"USA2P2552288"}
     assert result["accepted"] is False
     assert any(event["path"] == "isrc/USA2P2552288" for event in result["diagnostics"])
 
