@@ -200,10 +200,17 @@ def _saved_candidate(candidate: dict) -> dict:
     }
 
 
-def replay_report(report_path: str) -> dict:
+def replay_report(report_path: str, output_path: str | None = None, start_index: int = 0) -> dict:
     saved = json.loads(Path(report_path).read_text(encoding="utf-8"))
     results = []
-    for entry in saved.get("tracks", []):
+    entries = saved.get("tracks", [])
+    report = {"total_source_tracks": len(entries), "completed_input_rows": 0,
+              "last_completed_index": None, "next_start_index": start_index,
+              "start_index": start_index, "stopped_early": False,
+              "stop_reason": None, "tracks": results}
+    for entry in entries:
+        if entry.get("input_index", 0) < start_index:
+            continue
         candidates = {}
         old_accepted = set()
         for strategy in entry.get("strategies", {}).values():
@@ -225,18 +232,22 @@ def replay_report(report_path: str) -> dict:
             "catalog_exception": "山下達郎" in song["artist"],
             "matcher_diagnostics": matcher_diagnostics,
         })
+        report["completed_input_rows"] += 1
+        report["last_completed_index"] = entry.get("input_index")
+        report["next_start_index"] = entry.get("input_index", start_index) + 1
+        if output_path:
+            Path(output_path).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     candidate_rows = [row for row in results if row["saved_candidate_count"]]
     accepted_rows = [row for row in results if row["accepted_track_ids"]]
-    return {
-        "total_source_tracks": len(results),
+    report.update({
         "tracks_with_saved_candidates": len(candidate_rows),
         "tracks_accepted_by_current_matcher": len(accepted_rows),
         "acceptance_rate_all": len(accepted_rows) / len(results) if results else 0,
         "acceptance_rate_with_candidates": len(accepted_rows) / len(candidate_rows) if candidate_rows else 0,
         "newly_accepted_count": sum(bool(row["newly_accepted_track_ids"]) for row in results),
         "catalog_exception_tracks": [row["input_index"] for row in results if row["catalog_exception"]],
-        "tracks": results,
-    }
+    })
+    return report
 
 
 def _replay_match(song: dict[str, str], items: list[dict]) -> list[str]:
@@ -248,13 +259,28 @@ def _replay_match(song: dict[str, str], items: list[dict]) -> list[str]:
             self.items = response_items
 
     original_get = spotify._spotify_get
+    evaluated = 0
+    diagnostics = {"replay_spotify_search_calls": 0}
     try:
-        spotify._spotify_get = lambda *_args, **_kwargs: Response(items)
-        diagnostics = {}
-        accepted = spotify.search_track(
-            "replay", song["title"], [song["artist"]], "", diagnostics=diagnostics
-        )
-        return ([accepted] if accepted else []), diagnostics
+        for item in items:
+            calls = 0
+            def fake_get(*_args, **_kwargs):
+                nonlocal calls
+                calls += 1
+                return Response([item] if calls == 1 else [])
+            spotify._spotify_get = fake_get
+            item_diagnostics = {}
+            accepted = spotify.search_track(
+                "replay", song["title"], [song["artist"]], "", diagnostics=item_diagnostics
+            )
+            evaluated += 1
+            diagnostics["replay_spotify_search_calls"] += calls
+            if accepted:
+                diagnostics["evaluated_candidates"] = evaluated
+                diagnostics["accepted_candidate_id"] = accepted
+                return [accepted], diagnostics
+        diagnostics["evaluated_candidates"] = evaluated
+        return [], diagnostics
     finally:
         spotify._spotify_get = original_get
 
@@ -418,6 +444,7 @@ def main() -> None:
     parser.add_argument("--json", default="retrieval_benchmark.json")
     parser.add_argument("--mai-yamane-diagnostic", action="store_true")
     parser.add_argument("--replay")
+    parser.add_argument("--replay-start-index", type=int, default=0)
     args = parser.parse_args()
     if args.mai_yamane_diagnostic:
         if not args.access_token:
@@ -429,7 +456,7 @@ def main() -> None:
         print(f"JSON report: {args.json}")
         return
     if args.replay:
-        report = replay_report(args.replay)
+        report = replay_report(args.replay, args.json, args.replay_start_index)
         Path(args.json).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         _print_replay_summary(report)
         print(f"JSON report: {args.json}")

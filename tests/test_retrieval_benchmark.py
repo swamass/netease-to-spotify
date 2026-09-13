@@ -139,6 +139,39 @@ def test_replay_summary_counts_saved_candidates_and_catalog_exceptions(tmp_path,
     assert result["catalog_exception_tracks"] == [0]
 
 
+def test_replay_uses_one_candidate_pass_and_checkpoints(tmp_path, monkeypatch):
+    source = tmp_path / "retrieval_benchmark.json"
+    output = tmp_path / "matcher_replay.json"
+    candidate = {"spotify_track_id": "a", "title": "A", "artists": ["Artist"], "album": "", "isrc": None}
+    source.write_text(json.dumps({"tracks": [
+        {"input_index": 0, "source_title": "A", "source_artist": "Artist", "strategies": {"x": {"candidates": [candidate], "accepted_track_ids": []}}},
+        {"input_index": 1, "source_title": "B", "source_artist": "Artist", "strategies": {"x": {"candidates": [], "accepted_track_ids": []}}},
+    ]}), encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(retrieval_benchmark.spotify, "search_track", lambda *args, **kwargs: calls.append(args) or None)
+    result = retrieval_benchmark.replay_report(str(source), str(output))
+    assert len(calls) == 2
+    assert result["completed_input_rows"] == 2
+    assert result["last_completed_index"] == 1
+    assert result["next_start_index"] == 2
+    saved = json.loads(output.read_text(encoding="utf-8"))
+    assert saved["completed_input_rows"] == 2
+
+
+def test_replay_resume_skips_prior_rows(tmp_path, monkeypatch):
+    source = tmp_path / "retrieval_benchmark.json"
+    source.write_text(json.dumps({"tracks": [
+        {"input_index": 0, "source_title": "A", "source_artist": "Artist", "strategies": {}},
+        {"input_index": 1, "source_title": "B", "source_artist": "Artist", "strategies": {}},
+    ]}), encoding="utf-8")
+    seen = []
+    monkeypatch.setattr(retrieval_benchmark.spotify, "search_track", lambda *args, **kwargs: seen.append(args) or None)
+    result = retrieval_benchmark.replay_report(str(source), start_index=1)
+    assert result["start_index"] == 1
+    assert [row["input_index"] for row in result["tracks"]] == [1]
+    assert len(seen) == 1
+
+
 def test_parse_lines_uses_last_separator(tmp_path):
     path = tmp_path / "songs.txt"
     path.write_text("No More - Love - Artist\ninvalid\n", encoding="utf-8")
