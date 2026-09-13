@@ -190,6 +190,82 @@ def run_mai_yamane_diagnostic(access_token: str = "diagnostic") -> dict:
     return {"cases": [diagnose_candidate_with_musicbrainz(access_token, song, candidate) for song, candidate in cases]}
 
 
+def _saved_candidate(candidate: dict) -> dict:
+    return {
+        "id": candidate.get("spotify_track_id"),
+        "name": candidate.get("title", ""),
+        "artists": [{"name": name} for name in candidate.get("artists", [])],
+        "album": {"name": candidate.get("album", "")},
+        "external_ids": {"isrc": candidate["isrc"]} if candidate.get("isrc") else {},
+    }
+
+
+def replay_report(report_path: str) -> dict:
+    saved = json.loads(Path(report_path).read_text(encoding="utf-8"))
+    results = []
+    for entry in saved.get("tracks", []):
+        candidates = {}
+        old_accepted = set()
+        for strategy in entry.get("strategies", {}).values():
+            old_accepted.update(strategy.get("accepted_track_ids", []))
+            for item in strategy.get("candidates", []):
+                track_id = item.get("spotify_track_id")
+                if track_id:
+                    candidates[track_id] = _saved_candidate(item)
+        song = {"title": entry.get("source_title", ""), "artist": entry.get("source_artist", "")}
+        accepted, matcher_diagnostics = _replay_match(song, list(candidates.values()))
+        results.append({
+            "input_index": entry.get("input_index"),
+            "source_title": song["title"],
+            "source_artist": song["artist"],
+            "saved_candidate_count": len(candidates),
+            "accepted_track_ids": accepted,
+            "baseline_accepted_track_ids": sorted(old_accepted),
+            "newly_accepted_track_ids": sorted(set(accepted) - old_accepted),
+            "catalog_exception": "山下達郎" in song["artist"],
+            "matcher_diagnostics": matcher_diagnostics,
+        })
+    candidate_rows = [row for row in results if row["saved_candidate_count"]]
+    accepted_rows = [row for row in results if row["accepted_track_ids"]]
+    return {
+        "total_source_tracks": len(results),
+        "tracks_with_saved_candidates": len(candidate_rows),
+        "tracks_accepted_by_current_matcher": len(accepted_rows),
+        "acceptance_rate_all": len(accepted_rows) / len(results) if results else 0,
+        "acceptance_rate_with_candidates": len(accepted_rows) / len(candidate_rows) if candidate_rows else 0,
+        "newly_accepted_count": sum(bool(row["newly_accepted_track_ids"]) for row in results),
+        "catalog_exception_tracks": [row["input_index"] for row in results if row["catalog_exception"]],
+        "tracks": results,
+    }
+
+
+def _replay_match(song: dict[str, str], items: list[dict]) -> list[str]:
+    class Response:
+        def json(self):
+            return {"tracks": {"items": self.items}}
+
+        def __init__(self, response_items):
+            self.items = response_items
+
+    original_get = spotify._spotify_get
+    try:
+        spotify._spotify_get = lambda *_args, **_kwargs: Response(items)
+        diagnostics = {}
+        accepted = spotify.search_track(
+            "replay", song["title"], [song["artist"]], "", diagnostics=diagnostics
+        )
+        return ([accepted] if accepted else []), diagnostics
+    finally:
+        spotify._spotify_get = original_get
+
+
+def _print_replay_summary(report: dict) -> None:
+    print(f"Total source tracks: {report['total_source_tracks']}")
+    print(f"Tracks with saved candidates: {report['tracks_with_saved_candidates']}")
+    print(f"Accepted by current matcher: {report['tracks_accepted_by_current_matcher']}")
+    print(f"Acceptance rate: {report['acceptance_rate_all']:.4f}")
+
+
 def _request_key(params: dict) -> tuple:
     return tuple(sorted((key, params.get(key)) for key in ("q", "type", "limit", "offset", "market")))
 
@@ -336,19 +412,30 @@ def print_summary(report: dict) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Read-only Spotify retrieval benchmark")
     parser.add_argument("input", nargs="?", help="UTF-8 file containing TITLE - ARTIST lines")
-    parser.add_argument("--access-token", required=True)
+    parser.add_argument("--access-token")
     parser.add_argument("--delay-seconds", type=float, default=0.25)
     parser.add_argument("--start-index", type=int, default=0)
     parser.add_argument("--json", default="retrieval_benchmark.json")
     parser.add_argument("--mai-yamane-diagnostic", action="store_true")
+    parser.add_argument("--replay")
     args = parser.parse_args()
     if args.mai_yamane_diagnostic:
+        if not args.access_token:
+            args.access_token = "diagnostic"
         report = run_mai_yamane_diagnostic(args.access_token)
         Path(args.json).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         for case in report["cases"]:
             print(f"{case['source_title']} -> {case['candidate']['title']}: {'MATCH' if case['accepted'] else 'REJECT'}")
         print(f"JSON report: {args.json}")
         return
+    if args.replay:
+        report = replay_report(args.replay)
+        Path(args.json).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        _print_replay_summary(report)
+        print(f"JSON report: {args.json}")
+        return
+    if not args.access_token:
+        parser.error("the following arguments are required: --access-token")
     if not args.input:
         parser.error("the following arguments are required: input")
     report = benchmark(args.access_token, parse_lines(args.input), args.delay_seconds, args.start_index)

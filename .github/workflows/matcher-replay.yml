@@ -1,0 +1,38 @@
+name: Matcher Replay
+
+on:
+  workflow_dispatch:
+    inputs:
+      benchmark_run_id:
+        description: "Completed retrieval benchmark run ID"
+        required: true
+        default: "34570058054"
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - name: Download retrieval benchmark artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: spotify-retrieval-benchmark
+          path: benchmark-artifact
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: swamass/netease-to-spotify
+          run-id: ${{ inputs.benchmark_run_id }}
+      - name: Verify benchmark input
+        run: test -f benchmark-artifact/retrieval_benchmark.json
+      - run: |
+          python -m src.retrieval_benchmark \
+            --replay benchmark-artifact/retrieval_benchmark.json \
+            --json matcher_replay.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: matcher-replay
+          path: matcher_replay.json

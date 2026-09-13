@@ -104,6 +104,41 @@ def test_mai_yamane_cli_does_not_enter_normal_benchmark(monkeypatch, tmp_path):
     assert json.loads(output.read_text(encoding="utf-8")) == {"cases": []}
 
 
+def test_replay_reuses_saved_candidates_and_current_matcher(tmp_path, monkeypatch):
+    report_path = tmp_path / "retrieval_benchmark.json"
+    report_path.write_text(json.dumps({
+        "tracks": [{
+            "input_index": 4, "source_title": "Wave", "source_artist": "山根麻以",
+            "strategies": {"structured_page_0": {"candidates": [{
+                "spotify_track_id": "wave-id", "title": "Wave",
+                "artists": ["Mai Yamane"], "album": "Wave", "isrc": "USA2P2552288",
+            }], "accepted_track_ids": []}},
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+    seen = []
+    monkeypatch.setattr(retrieval_benchmark.spotify, "search_track", lambda *args, **kwargs: seen.append(args) or "wave-id")
+    monkeypatch.setattr(retrieval_benchmark.spotify, "_spotify_get", lambda *_args: (_ for _ in ()).throw(AssertionError("Spotify called")))
+    result = retrieval_benchmark.replay_report(str(report_path))
+    assert result["tracks_accepted_by_current_matcher"] == 1
+    assert result["tracks"][0]["accepted_track_ids"] == ["wave-id"]
+    assert seen[0][1:4] == ("Wave", ["山根麻以"], "")
+
+
+def test_replay_summary_counts_saved_candidates_and_catalog_exceptions(tmp_path, monkeypatch):
+    report_path = tmp_path / "retrieval_benchmark.json"
+    report_path.write_text(json.dumps({"tracks": [
+        {"input_index": 0, "source_title": "A", "source_artist": "山下達郎", "strategies": {}},
+        {"input_index": 1, "source_title": "B", "source_artist": "Other", "strategies": {
+            "track_only": {"candidates": [{"spotify_track_id": "b", "title": "B", "artists": ["Other"], "album": "", "isrc": None}], "accepted_track_ids": []}
+        }},
+    ]}, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(retrieval_benchmark.spotify, "search_track", lambda *args, **kwargs: None)
+    result = retrieval_benchmark.replay_report(str(report_path))
+    assert result["total_source_tracks"] == 2
+    assert result["tracks_with_saved_candidates"] == 1
+    assert result["catalog_exception_tracks"] == [0]
+
+
 def test_parse_lines_uses_last_separator(tmp_path):
     path = tmp_path / "songs.txt"
     path.write_text("No More - Love - Artist\ninvalid\n", encoding="utf-8")
