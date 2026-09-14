@@ -194,3 +194,85 @@ def test_artist_identity_can_intersect_japanese_and_romanized_alias_results(monk
     assert spotify._musicbrainz_artist_identity(
         ["秋元薫"], [{"name": "Kaoru Akimoto"}]
     ) == {"akimoto-mbid"}
+
+
+def test_artist_credit_identity_confirms_same_entity_with_different_display_credit(monkeypatch):
+    item = candidate("older-girl", "Older Girl", "1986 OMEGA TRIBE", isrc="JPVP08601107")
+    recording = {
+        "id": "older-girl-recording",
+        "title": "Older Girl",
+        "artist-credit": [{
+            "name": "1986 OMEGA TRIBE",
+            "artist": {"id": "omega-mbid", "name": "オメガトライブ"},
+        }],
+        "disambiguation": "",
+    }
+
+    monkeypatch.setattr(spotify, "_musicbrainz_artist_identity", lambda *_args: set())
+    monkeypatch.setattr(
+        spotify,
+        "_musicbrainz_recordings_for_isrc",
+        lambda _isrc: [recording],
+    )
+
+    def fake_mb_get(path, params):
+        query = params.get("query", "")
+        if path == "artist" and "1986オメガトライブ" in query:
+            return {"artists": []}
+        if path == "recording" and query == 'creditname:"1986オメガトライブ"':
+            return {"recordings": [{
+                "artist-credit": [{
+                    "name": "1986オメガトライブ",
+                    "artist": {"id": "omega-mbid", "name": "オメガトライブ"},
+                }]
+            }]}
+        return {"artists": []}
+
+    monkeypatch.setattr(spotify, "_musicbrainz_get", fake_mb_get)
+    assert spotify._musicbrainz_artist_identity_supported(
+        ["1986オメガトライブ"], item
+    ) is True
+    assert spotify._musicbrainz_recording_identity_accepts(
+        "Older Girl", ["1986オメガトライブ"], "", item
+    ) is True
+
+
+def test_artist_credit_identity_rejects_different_entity_even_when_title_matches(monkeypatch):
+    item = candidate("wrong", "RIDE ON TIME", "Black Box", isrc="TESTWRONG")
+    recording = {
+        "id": "wrong-recording",
+        "title": "RIDE ON TIME",
+        "artist-credit": [{
+            "name": "Black Box",
+            "artist": {"id": "black-box-mbid", "name": "Black Box"},
+        }],
+        "disambiguation": "",
+    }
+
+    monkeypatch.setattr(spotify, "_musicbrainz_artist_identity", lambda *_args: set())
+    monkeypatch.setattr(
+        spotify,
+        "_musicbrainz_recordings_for_isrc",
+        lambda _isrc: [recording],
+    )
+
+    def fake_mb_get(path, params):
+        query = params.get("query", "")
+        if path == "artist" and "山下達郎" in query:
+            return {"artists": [{"id": "yamashita-mbid", "name": "山下達郎"}]}
+        if path == "recording" and query == 'creditname:"山下達郎"':
+            return {"recordings": [{
+                "artist-credit": [{
+                    "name": "山下達郎",
+                    "artist": {"id": "yamashita-mbid", "name": "山下達郎"},
+                }]
+            }]}
+        return {"artists": []}
+
+    monkeypatch.setattr(spotify, "_musicbrainz_get", fake_mb_get)
+    assert spotify._musicbrainz_artist_identity_supported(
+        ["山下達郎"], item
+    ) is False
+    assert spotify._musicbrainz_recording_identity_accepts(
+        "RIDE ON TIME", ["山下達郎"], "", item
+    ) is False
