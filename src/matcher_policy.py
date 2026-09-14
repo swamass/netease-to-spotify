@@ -1,10 +1,10 @@
-"""Small matcher policy overrides shared by sync, dry-run, and benchmarks.
+"""Shared conservative matcher policy overrides.
 
-The production matcher remains conservative. This module only makes one
-narrow MusicBrainz policy explicit: when the Spotify title already matches,
-the artist identity is confirmed, there is no version conflict, and
-MusicBrainz has no recording rows for the candidate ISRC, missing recording
-metadata must not veto an otherwise strong match.
+Two narrow MusicBrainz policies live here:
+1. Artist lookup only trusts exact canonical/sort-name/alias evidence and falls
+   back to an unfielded search when a fielded search returns fuzzy results.
+2. When a title already matches and artist identity is confirmed, missing
+   MusicBrainz recording rows for an ISRC do not veto the match.
 
 Cross-script title rescue still requires recording-level evidence.
 """
@@ -16,6 +16,55 @@ from types import ModuleType
 
 def apply(spotify: ModuleType) -> None:
     """Apply the shared matcher policy to the loaded ``spotify`` module."""
+
+    def artist_result_names(artist: dict) -> set[str]:
+        values = {
+            artist.get("name", ""),
+            artist.get("sort-name", ""),
+        }
+        values.update(
+            alias.get("name", "")
+            for alias in artist.get("aliases", [])
+            if alias.get("name")
+        )
+        return {
+            spotify._normalize_text(value)
+            for value in values
+            if value
+        }
+
+    def exact_artist_ids(data: dict | None, name: str) -> set[str]:
+        normalized_name = spotify._normalize_text(name)
+        return {
+            artist.get("id")
+            for artist in (data or {}).get("artists", [])
+            if artist.get("id")
+            and normalized_name in artist_result_names(artist)
+        }
+
+    def musicbrainz_artist_ids(name: str) -> set[str]:
+        """Resolve only exact canonical/alias identity, never fuzzy search hits."""
+        if not name:
+            return set()
+
+        field_data = spotify._musicbrainz_get(
+            "artist",
+            {"query": f'artist:"{name}"', "fmt": "json", "limit": "5"},
+        )
+        field_ids = exact_artist_ids(field_data, name)
+        if field_ids:
+            return field_ids
+
+        # A non-empty field query can still be a fuzzy MusicBrainz hit. Do not
+        # stop there. The unfielded query often exposes canonical names and
+        # aliases that let us verify Japanese/Chinese <-> romanized identities.
+        fallback_data = spotify._musicbrainz_get(
+            "artist",
+            {"query": name, "fmt": "json", "limit": "5"},
+        )
+        return exact_artist_ids(fallback_data, name)
+
+    spotify._musicbrainz_artist_ids = musicbrainz_artist_ids
 
     def musicbrainz_recording_identity_accepts(
         source_name: str,
@@ -53,10 +102,6 @@ def apply(spotify: ModuleType) -> None:
         recordings = spotify._musicbrainz_recordings_for_isrc(isrc)
         print(f"MB ISRC lookup: isrc={isrc} recording_count={len(recordings)}")
 
-        # Missing MusicBrainz recording metadata is not negative evidence when
-        # the title already matches and the artist identity is independently
-        # confirmed. Cross-script title rescue remains stricter because the
-        # title itself still needs recording-level corroboration.
         if not recordings:
             confirmed = not allow_cross_script_title
             print(
