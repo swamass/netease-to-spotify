@@ -1,9 +1,8 @@
 """Read-only diagnostic for TuneMyMusic-success tracks rejected by matcher replay.
 
 This script never writes playlists and never calls the live Spotify API. It
-reuses the saved retrieval benchmark candidates, filters out TuneMyMusic's
-known missing tracks, and replays the current matcher while preserving
-matcher diagnostics and output.
+replays the saved artist-bound Spotify retrieval strategies in the same two
+query slots used by production matching, preserving rank/order provenance.
 """
 
 from __future__ import annotations
@@ -43,17 +42,27 @@ def _saved_candidate(candidate: dict) -> dict:
     }
 
 
+def _strategy_items(entry: dict, strategy_name: str) -> list[dict]:
+    strategy = entry.get("strategies", {}).get(strategy_name, {})
+    return [_saved_candidate(candidate) for candidate in strategy.get("candidates", [])]
+
+
 def _collect_candidates(entry: dict) -> list[dict]:
+    """Return unique artist-bound candidates for reporting only."""
     candidates: dict[str, dict] = {}
-    for strategy in entry.get("strategies", {}).values():
-        for candidate in strategy.get("candidates", []):
-            track_id = candidate.get("spotify_track_id")
+    for strategy_name in ("structured_page_0", "simplified_title"):
+        for item in _strategy_items(entry, strategy_name):
+            track_id = item.get("id")
             if track_id and track_id not in candidates:
-                candidates[track_id] = _saved_candidate(candidate)
+                candidates[track_id] = item
     return list(candidates.values())
 
 
-def _replay_one(song: dict[str, str], items: list[dict]) -> dict:
+def _replay_one(
+    song: dict[str, str],
+    first_items: list[dict],
+    second_items: list[dict],
+) -> dict:
     class Response:
         def __init__(self, response_items: list[dict]):
             self.items = response_items
@@ -69,7 +78,11 @@ def _replay_one(song: dict[str, str], items: list[dict]) -> dict:
     def fake_get(*_args, **_kwargs):
         nonlocal calls
         calls += 1
-        return Response(items if calls == 1 else [])
+        if calls == 1:
+            return Response(first_items)
+        if calls == 2:
+            return Response(second_items)
+        return Response([])
 
     try:
         spotify._spotify_get = fake_get
@@ -119,6 +132,8 @@ def diagnose(
     unique_candidate_ids: set[str] = set()
 
     for entry in target_entries:
+        first_items = _strategy_items(entry, "structured_page_0")
+        second_items = _strategy_items(entry, "simplified_title")
         items = _collect_candidates(entry)
         unique_candidate_ids.update(
             item.get("id") for item in items if item.get("id")
@@ -128,24 +143,26 @@ def diagnose(
             "artist": entry.get("source_artist", ""),
         }
 
-        if not items:
+        if not first_items and not second_items:
             replay_result = {
                 "accepted_track_id": None,
                 "matcher_diagnostics": {
-                    "category": "NO_SAVED_CANDIDATES",
+                    "category": "NO_SAVED_ARTIST_BOUND_CANDIDATES",
                     "candidates_returned": 0,
                 },
                 "matcher_output": [],
                 "replay_spotify_search_calls": 0,
             }
         else:
-            replay_result = _replay_one(song, items)
+            replay_result = _replay_one(song, first_items, second_items)
 
         rows.append({
             "input_index": entry.get("input_index"),
             "source_title": song["title"],
             "source_artist": song["artist"],
             "saved_candidate_count": len(items),
+            "structured_page_0_count": len(first_items),
+            "simplified_title_count": len(second_items),
             "candidates": [
                 {
                     "spotify_track_id": item.get("id"),
@@ -176,6 +193,7 @@ def diagnose(
 
     return {
         "benchmark_scope": "TuneMyMusic success set only",
+        "replay_scope": "artist-bound strategies only",
         "tunemymusic_source_total": source_total,
         "tunemymusic_missing_count": len(missing),
         "tunemymusic_success_count": success_count,
