@@ -1,9 +1,9 @@
 """Read-only diagnostic for TuneMyMusic-success tracks rejected by matcher replay.
 
-This script never writes playlists. It reuses the saved retrieval benchmark,
-filters out TuneMyMusic's known missing tracks, hydrates saved Spotify candidates
-with current track metadata (including duration_ms), and replays the current
-matcher while preserving diagnostics and matcher output.
+This script never writes playlists and never calls the live Spotify API. It
+reuses the saved retrieval benchmark candidates, filters out TuneMyMusic's
+known missing tracks, and replays the current matcher while preserving
+matcher diagnostics and output.
 """
 
 from __future__ import annotations
@@ -53,27 +53,6 @@ def _collect_candidates(entry: dict) -> list[dict]:
     return list(candidates.values())
 
 
-def _chunks(values: list[str], size: int = 50):
-    for start in range(0, len(values), size):
-        yield values[start:start + size]
-
-
-def _hydrate_candidates(access_token: str, candidate_ids: list[str]) -> dict[str, dict]:
-    hydrated: dict[str, dict] = {}
-    for batch in _chunks(candidate_ids, 50):
-        response = spotify._spotify_get(
-            f"{spotify.SPOTIFY_API_URL}/tracks",
-            access_token,
-            {"ids": ",".join(batch)},
-        )
-        if response is None:
-            continue
-        for item in response.json().get("tracks", []):
-            if item and item.get("id"):
-                hydrated[item["id"]] = item
-    return hydrated
-
-
 def _replay_one(song: dict[str, str], items: list[dict]) -> dict:
     class Response:
         def __init__(self, response_items: list[dict]):
@@ -114,7 +93,6 @@ def _replay_one(song: dict[str, str], items: list[dict]) -> dict:
 
 
 def diagnose(
-    access_token: str,
     retrieval_report_path: str,
     matcher_replay_path: str,
     missing_path: str,
@@ -137,26 +115,14 @@ def diagnose(
         not in missing
     ]
 
-    saved_candidates_by_index: dict[int, list[dict]] = {}
-    candidate_ids: list[str] = []
-    seen_ids: set[str] = set()
-    for entry in target_entries:
-        index = entry.get("input_index")
-        candidates = _collect_candidates(entry)
-        saved_candidates_by_index[index] = candidates
-        for candidate in candidates:
-            track_id = candidate.get("id")
-            if track_id and track_id not in seen_ids:
-                seen_ids.add(track_id)
-                candidate_ids.append(track_id)
-
-    hydrated = _hydrate_candidates(access_token, candidate_ids)
-
     rows = []
+    unique_candidate_ids: set[str] = set()
+
     for entry in target_entries:
-        index = entry.get("input_index")
-        saved_candidates = saved_candidates_by_index.get(index, [])
-        items = [hydrated.get(item.get("id"), item) for item in saved_candidates]
+        items = _collect_candidates(entry)
+        unique_candidate_ids.update(
+            item.get("id") for item in items if item.get("id")
+        )
         song = {
             "title": entry.get("source_title", ""),
             "artist": entry.get("source_artist", ""),
@@ -176,20 +142,19 @@ def diagnose(
             replay_result = _replay_one(song, items)
 
         rows.append({
-            "input_index": index,
+            "input_index": entry.get("input_index"),
             "source_title": song["title"],
             "source_artist": song["artist"],
             "saved_candidate_count": len(items),
-            "hydrated_candidate_count": sum(
-                bool(item.get("id") in hydrated) for item in saved_candidates
-            ),
             "candidates": [
                 {
                     "spotify_track_id": item.get("id"),
                     "title": item.get("name", ""),
-                    "artists": [artist.get("name", "") for artist in item.get("artists", [])],
+                    "artists": [
+                        artist.get("name", "")
+                        for artist in item.get("artists", [])
+                    ],
                     "album": item.get("album", {}).get("name", ""),
-                    "duration_ms": item.get("duration_ms"),
                     "isrc": (item.get("external_ids") or {}).get("isrc"),
                 }
                 for item in items
@@ -197,27 +162,35 @@ def diagnose(
             **replay_result,
         })
 
-    accepted_after_hydration = [row for row in rows if row["accepted_track_id"]]
+    newly_accepted = [row for row in rows if row["accepted_track_id"]]
     no_candidates = [row for row in rows if not row["saved_candidate_count"]]
     still_rejected = [
-        row for row in rows
+        row
+        for row in rows
         if row["saved_candidate_count"] and not row["accepted_track_id"]
     ]
 
+    source_total = retrieval.get("total", len(retrieval.get("tracks", [])))
+    success_count = source_total - len(missing)
+    old_accepted_count = success_count - len(rows)
+
     return {
         "benchmark_scope": "TuneMyMusic success set only",
-        "tunemymusic_source_total": retrieval.get("total", len(retrieval.get("tracks", []))),
+        "tunemymusic_source_total": source_total,
         "tunemymusic_missing_count": len(missing),
-        "tunemymusic_success_count": (
-            retrieval.get("total", len(retrieval.get("tracks", []))) - len(missing)
-        ),
+        "tunemymusic_success_count": success_count,
+        "old_replay_accepted_in_success_set": old_accepted_count,
         "old_replay_failed_in_success_set": len(rows),
         "old_replay_failed_with_no_saved_candidates": len(no_candidates),
         "old_replay_failed_with_saved_candidates": len(rows) - len(no_candidates),
-        "accepted_after_candidate_hydration": len(accepted_after_hydration),
-        "still_rejected_after_candidate_hydration": len(still_rejected),
-        "unique_saved_candidate_ids": len(candidate_ids),
-        "hydrated_candidate_ids": len(hydrated),
+        "newly_accepted_by_current_matcher": len(newly_accepted),
+        "current_matcher_accepted_in_success_set": old_accepted_count + len(newly_accepted),
+        "current_matcher_acceptance_rate": (
+            (old_accepted_count + len(newly_accepted)) / success_count
+            if success_count else 0
+        ),
+        "still_rejected_with_saved_candidates": len(still_rejected),
+        "unique_saved_candidate_ids": len(unique_candidate_ids),
         "tracks": rows,
     }
 
@@ -227,12 +200,10 @@ def main() -> None:
     parser.add_argument("retrieval_report")
     parser.add_argument("matcher_replay")
     parser.add_argument("missing")
-    parser.add_argument("--access-token", required=True)
     parser.add_argument("--json", required=True)
     args = parser.parse_args()
 
     report = diagnose(
-        args.access_token,
         args.retrieval_report,
         args.matcher_replay,
         args.missing,
@@ -242,9 +213,11 @@ def main() -> None:
         encoding="utf-8",
     )
     print(f"TuneMyMusic success benchmark: {report['tunemymusic_success_count']}")
-    print(f"Old replay failures in success set: {report['old_replay_failed_in_success_set']}")
-    print(f"Accepted after candidate hydration: {report['accepted_after_candidate_hydration']}")
-    print(f"Still rejected after hydration: {report['still_rejected_after_candidate_hydration']}")
+    print(f"Old replay accepted: {report['old_replay_accepted_in_success_set']}")
+    print(f"Newly accepted by current matcher: {report['newly_accepted_by_current_matcher']}")
+    print(f"Current matcher accepted: {report['current_matcher_accepted_in_success_set']}")
+    print(f"Current matcher acceptance rate: {report['current_matcher_acceptance_rate']:.4f}")
+    print(f"Still rejected with candidates: {report['still_rejected_with_saved_candidates']}")
 
 
 if __name__ == "__main__":
