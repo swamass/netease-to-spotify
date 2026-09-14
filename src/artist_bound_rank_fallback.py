@@ -1,8 +1,10 @@
 """Conservative final fallback based on Spotify artist-bound search consensus.
 
 No extra Spotify requests are made. The existing two artist-bound searches run
-first. Only when the normal matcher returns no result do we consider the top
-result from each search, and only when both searches agree on the same ISRC.
+first. Only when the normal matcher returns no result do we consider their top
+results. Both searches must agree on the same ISRC, and MusicBrainz must have
+successfully returned at least one recording for that exact ISRC during normal
+matching. This keeps MusicBrainz outages and unknown ISRCs fail-closed.
 """
 
 from __future__ import annotations
@@ -83,7 +85,9 @@ def apply(spotify: ModuleType) -> None:
         diagnostics: dict | None = None,
     ) -> str | None:
         rank_one_items: list[dict] = []
+        confirmed_isrcs: set[str] = set()
         inner_get = spotify._spotify_get
+        inner_mb_get = spotify._musicbrainz_get
 
         def capturing_get(url: str, token: str, params: dict):
             response = inner_get(url, token, params)
@@ -97,8 +101,17 @@ def apply(spotify: ModuleType) -> None:
                     rank_one_items.append(items[0])
             return CapturedResponse(payload)
 
+        def capturing_mb_get(path: str, params: dict):
+            result = inner_mb_get(path, params)
+            if path.startswith("isrc/") and result:
+                recordings = result.get("recordings", [])
+                if recordings:
+                    confirmed_isrcs.add(path.split("/", 1)[1])
+            return result
+
         try:
             spotify._spotify_get = capturing_get
+            spotify._musicbrainz_get = capturing_mb_get
             matched = original_search_track(
                 access_token,
                 name,
@@ -109,6 +122,7 @@ def apply(spotify: ModuleType) -> None:
             )
         finally:
             spotify._spotify_get = inner_get
+            spotify._musicbrainz_get = inner_mb_get
 
         if matched:
             return matched
@@ -120,6 +134,8 @@ def apply(spotify: ModuleType) -> None:
         second_isrc = (second.get("external_ids") or {}).get("isrc")
         if not first_isrc or first_isrc != second_isrc:
             return None
+        if first_isrc not in confirmed_isrcs:
+            return None
         if not eligible(name, artists, album, first):
             return None
 
@@ -127,7 +143,7 @@ def apply(spotify: ModuleType) -> None:
             "Spotify artist-bound rank consensus fallback: "
             f"track={first.get('name', '')} "
             f"artist={', '.join(a.get('name', '') for a in first.get('artists', []))} "
-            f"isrc={first_isrc} result=ACCEPT"
+            f"isrc={first_isrc} mb_isrc=FOUND result=ACCEPT"
         )
         if diagnostics is not None:
             diagnostics["category"] = None
