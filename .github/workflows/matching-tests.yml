@@ -4,7 +4,10 @@ on:
   push:
     paths:
       - "src/spotify.py"
+      - "src/__init__.py"
+      - "src/matcher_policy.py"
       - "tests/test_spotify_matching.py"
+      - "tests/test_matcher_policy.py"
       - "requirements.txt"
       - ".github/workflows/matching-tests.yml"
   workflow_dispatch:
