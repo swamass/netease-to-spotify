@@ -1,12 +1,12 @@
 """Shared conservative matcher policy overrides.
 
-Two narrow MusicBrainz policies live here:
-1. Artist lookup only trusts exact canonical/sort-name/alias evidence and falls
-   back to an unfielded search when a fielded search returns fuzzy results.
-2. When a title already matches and artist identity is confirmed, missing
-   MusicBrainz recording rows for an ISRC do not veto the match.
-
-Cross-script title rescue still requires recording-level evidence.
+MusicBrainz is used as corroborating evidence, not as a mandatory complete
+catalog. This policy supports three narrow identity paths:
+1. Exact canonical/sort-name/alias artist identity.
+2. Exact recording artist-credit identity when display names are release
+   credits rather than ordinary artist aliases.
+3. Matching title + confirmed artist identity may survive a missing ISRC
+   recording row; cross-script title rescue still requires recording evidence.
 """
 
 from __future__ import annotations
@@ -45,10 +45,9 @@ def apply(spotify: ModuleType) -> None:
         if exact:
             return exact
 
-        # Some unit-test fixtures intentionally return only a single MBID and
-        # omit the real API's canonical name fields. Keep those fixtures usable
-        # without weakening production matching: real MusicBrainz artist search
-        # results include name metadata, so this branch is not reached there.
+        # Unit-test fixtures sometimes return only an MBID. Real MusicBrainz
+        # search results include identity metadata, so this does not make live
+        # matching more permissive.
         if len(artists) == 1:
             artist = artists[0]
             has_identity_metadata = bool(
@@ -61,7 +60,7 @@ def apply(spotify: ModuleType) -> None:
         return set()
 
     def musicbrainz_artist_ids(name: str) -> set[str]:
-        """Resolve only exact canonical/alias identity, never fuzzy search hits."""
+        """Resolve only exact canonical/alias identity, never fuzzy hits."""
         if not name:
             return set()
 
@@ -73,9 +72,6 @@ def apply(spotify: ModuleType) -> None:
         if field_ids:
             return field_ids
 
-        # A non-empty field query can still be a fuzzy MusicBrainz hit. Do not
-        # stop there. The unfielded query often exposes canonical names and
-        # aliases that let us verify Japanese/Chinese <-> romanized identities.
         fallback_data = spotify._musicbrainz_get(
             "artist",
             {"query": name, "fmt": "json", "limit": "5"},
@@ -83,6 +79,96 @@ def apply(spotify: ModuleType) -> None:
         return exact_artist_ids(fallback_data, name)
 
     spotify._musicbrainz_artist_ids = musicbrainz_artist_ids
+
+    def credit_name(credit: dict) -> str:
+        return credit.get("name") or credit.get("artist", {}).get("name", "")
+
+    def exact_credit_artist_ids(name: str) -> set[str]:
+        """Find MBIDs where ``name`` is an exact recording artist credit."""
+        if not name:
+            return set()
+        normalized = spotify._normalize_text(name)
+        data = spotify._musicbrainz_get(
+            "recording",
+            {"query": f'creditname:"{name}"', "fmt": "json", "limit": "5"},
+        )
+        ids: set[str] = set()
+        for recording in (data or {}).get("recordings", []):
+            for credit in recording.get("artist-credit", []):
+                mbid = credit.get("artist", {}).get("id")
+                if mbid and spotify._normalize_text(credit_name(credit)) == normalized:
+                    ids.add(mbid)
+        return ids
+
+    def recording_credit_artist_ids(candidate: dict, recordings: list[dict]) -> set[str]:
+        """Return ISRC recording MBIDs credited exactly as Spotify displays them."""
+        candidate_names = {
+            spotify._normalize_text(artist.get("name", ""))
+            for artist in candidate.get("artists", [])
+            if artist.get("name")
+        }
+        if not candidate_names:
+            return set()
+
+        ids: set[str] = set()
+        for recording in recordings:
+            for credit in recording.get("artist-credit", []):
+                mbid = credit.get("artist", {}).get("id")
+                credited = spotify._normalize_text(credit_name(credit))
+                if mbid and credited in candidate_names:
+                    ids.add(mbid)
+        return ids
+
+    def artist_credit_identity_ids(
+        source_artists: list[str], candidate: dict, recordings: list[dict] | None = None,
+    ) -> set[str]:
+        """Confirm source and Spotify display credits point at the same MBID."""
+        isrc = (candidate.get("external_ids") or {}).get("isrc")
+        if not source_artists or not isrc:
+            return set()
+        if recordings is None:
+            recordings = spotify._musicbrainz_recordings_for_isrc(isrc)
+        if not recordings:
+            return set()
+
+        source_credit_ids: set[str] = set()
+        for source_name in source_artists:
+            source_credit_ids.update(exact_credit_artist_ids(source_name))
+            source_credit_ids.update(spotify._musicbrainz_artist_ids(source_name))
+        if not source_credit_ids:
+            return set()
+
+        candidate_credit_ids = recording_credit_artist_ids(candidate, recordings)
+        return source_credit_ids & candidate_credit_ids
+
+    def musicbrainz_artist_identity_supported(
+        source_artists: list[str], candidate: dict,
+    ) -> bool:
+        candidate_artists = candidate.get("artists", [])
+        if not candidate_artists:
+            return False
+        source_names = ", ".join(source_artists)
+        candidate_names = ", ".join(
+            artist.get("name", "") for artist in candidate_artists
+        )
+        matched_ids = spotify._musicbrainz_artist_identity(
+            source_artists, candidate_artists
+        )
+        route = "artist"
+        if not matched_ids:
+            matched_ids = artist_credit_identity_ids(source_artists, candidate)
+            route = "artist-credit"
+        print(
+            "MB artist identity: "
+            f"source_artist={source_names} spotify_artist={candidate_names} "
+            f"identity={'CONFIRMED' if matched_ids else 'NOT_CONFIRMED'} "
+            f"route={route}"
+        )
+        return bool(matched_ids)
+
+    spotify._musicbrainz_artist_identity_supported = (
+        musicbrainz_artist_identity_supported
+    )
 
     def musicbrainz_recording_identity_accepts(
         source_name: str,
@@ -110,23 +196,28 @@ def apply(spotify: ModuleType) -> None:
         ):
             return False
 
-        artist_ids = spotify._musicbrainz_artist_identity(
-            source_artists,
-            candidate.get("artists", []),
-        )
-        if not artist_ids:
-            return False
-
         recordings = spotify._musicbrainz_recordings_for_isrc(isrc)
         print(f"MB ISRC lookup: isrc={isrc} recording_count={len(recordings)}")
 
+        artist_ids = spotify._musicbrainz_artist_identity(
+            source_artists, candidate.get("artists", [])
+        )
+        identity_route = "artist"
+        if not artist_ids:
+            artist_ids = artist_credit_identity_ids(
+                source_artists, candidate, recordings
+            )
+            identity_route = "artist-credit"
+        if not artist_ids:
+            return False
+
         if not recordings:
-            confirmed = not allow_cross_script_title
+            confirmed = not allow_cross_script_title and identity_route == "artist"
             print(
                 "MB ISRC verification: "
                 f"isrc={isrc} duration_diff_ms=None "
                 f"result={'CONFIRMED' if confirmed else 'NOT_CONFIRMED'} "
-                f"reason={'artist+title fallback' if confirmed else 'cross-script requires recording evidence'}"
+                f"identity_route={identity_route}"
             )
             return confirmed
 
@@ -183,7 +274,8 @@ def apply(spotify: ModuleType) -> None:
         print(
             "MB ISRC verification: "
             f"isrc={isrc} duration_diff_ms={best_difference} "
-            f"result={'CONFIRMED' if confirmed else 'NOT_CONFIRMED'}"
+            f"result={'CONFIRMED' if confirmed else 'NOT_CONFIRMED'} "
+            f"identity_route={identity_route}"
         )
         return confirmed
 
