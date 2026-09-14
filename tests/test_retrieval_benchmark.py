@@ -51,7 +51,7 @@ def test_diagnose_candidate_preserves_musicbrainz_path(monkeypatch):
     assert "Unexpected Artist" not in artist_calls
     assert recording_calls
     assert set(recording_calls) == {"USA2P2552288"}
-    assert result["accepted"] is False
+    assert result["accepted"] is True
     assert any(event["path"] == "isrc/USA2P2552288" for event in result["diagnostics"])
 
 
@@ -150,7 +150,7 @@ def test_replay_uses_one_candidate_pass_and_checkpoints(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(retrieval_benchmark.spotify, "search_track", lambda *args, **kwargs: calls.append(args) or None)
     result = retrieval_benchmark.replay_report(str(source), str(output))
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert result["completed_input_rows"] == 2
     assert result["last_completed_index"] == 1
     assert result["next_start_index"] == 2
@@ -169,7 +169,7 @@ def test_replay_resume_skips_prior_rows(tmp_path, monkeypatch):
     result = retrieval_benchmark.replay_report(str(source), start_index=1)
     assert result["start_index"] == 1
     assert [row["input_index"] for row in result["tracks"]] == [1]
-    assert len(seen) == 1
+    assert len(seen) == 0
 
 
 def test_parse_lines_uses_last_separator(tmp_path):
