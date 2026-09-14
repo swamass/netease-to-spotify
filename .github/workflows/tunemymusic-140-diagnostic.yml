@@ -10,7 +10,7 @@ permissions:
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -39,34 +39,12 @@ jobs:
           test -f prior-retrieval/retrieval_benchmark.json
           test -f prior-replay/matcher_replay.json
 
-      - name: Obtain Spotify access token
-        env:
-          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
-          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
-          SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
-        run: |
-          python - <<'PY'
-          import os
-          from src.spotify import get_access_token
-
-          token = get_access_token(
-              os.environ["SPOTIFY_CLIENT_ID"],
-              os.environ["SPOTIFY_CLIENT_SECRET"],
-              os.environ["SPOTIFY_REFRESH_TOKEN"],
-          )
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
-              env_file.write(f"SPOTIFY_ACCESS_TOKEN={token}\n")
-          PY
-
       - name: Diagnose TuneMyMusic-success replay failures
-        env:
-          SPOTIFY_ACCESS_TOKEN: ${{ env.SPOTIFY_ACCESS_TOKEN }}
         run: >-
           python -m src.tunemymusic_failure_diagnostic
           prior-retrieval/retrieval_benchmark.json
           prior-replay/matcher_replay.json
           data/tunemymusic_missing_7.txt
-          --access-token "$SPOTIFY_ACCESS_TOKEN"
           --json tunemymusic_140_failure_diagnostic.json
 
       - name: Upload diagnostic report
