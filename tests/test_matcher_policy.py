@@ -141,16 +141,36 @@ def test_artist_credit_identity_rejects_different_entity_even_when_title_matches
     assert spotify._musicbrainz_recording_identity_accepts("RIDE ON TIME", ["山下達郎"], "", item) is False
 
 
-def _rank_fallback_setup(monkeypatch, first_items, second_items):
+def _rank_fallback_setup(monkeypatch, first_items, second_items, mb_isrc_available=True):
     responses = [FakeResponse(first_items), FakeResponse(second_items)]
     monkeypatch.setattr(spotify, "_spotify_get", lambda *_args, **_kwargs: responses.pop(0))
-    monkeypatch.setattr(spotify, "_musicbrainz_artist_identity_supported", lambda *_args, **_kwargs: False)
+
+    def fake_mb_get(path, _params):
+        if mb_isrc_available and path.startswith("isrc/"):
+            return {"recordings": [{"id": "recording"}]}
+        return None
+
+    monkeypatch.setattr(spotify, "_musicbrainz_get", fake_mb_get)
+
+    def unsupported(source_artists, item):
+        isrc = (item.get("external_ids") or {}).get("isrc")
+        if isrc:
+            spotify._musicbrainz_get(f"isrc/{isrc}", {"fmt": "json"})
+        return False
+
+    monkeypatch.setattr(spotify, "_musicbrainz_artist_identity_supported", unsupported)
 
 
-def test_rank_consensus_accepts_exact_cross_script_artist(monkeypatch):
+def test_rank_consensus_accepts_exact_cross_script_artist_with_mb_isrc(monkeypatch):
     item = candidate("dress-down", "Dress Down", "Kaoru Akimoto", album="Cologne", isrc="JPVI08613060")
     _rank_fallback_setup(monkeypatch, [item], [item])
     assert spotify.search_track("token", "Dress Down", ["秋元薫"], "") == "dress-down"
+
+
+def test_rank_consensus_rejects_when_mb_isrc_is_unavailable(monkeypatch):
+    item = candidate("dress-down", "Dress Down", "Kaoru Akimoto", isrc="JPVI08613060")
+    _rank_fallback_setup(monkeypatch, [item], [item], mb_isrc_available=False)
+    assert spotify.search_track("token", "Dress Down", ["秋元薫"], "") is None
 
 
 def test_rank_consensus_rejects_disagreeing_top_isrcs(monkeypatch):
