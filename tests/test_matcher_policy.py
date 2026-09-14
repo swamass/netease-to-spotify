@@ -117,3 +117,80 @@ def test_search_track_accepts_confirmed_cross_language_artist_without_mb_recordi
     assert spotify.search_track(
         "test-token", "余韻", ["来生たかお"], ""
     ) == "yo-in"
+
+
+def test_artist_id_resolver_ignores_fuzzy_field_hit_and_uses_exact_fallback_alias(monkeypatch):
+    responses = [
+        {"artists": [{"id": "wrong", "name": "Kaoru", "aliases": []}]},
+        {"artists": [{
+            "id": "akimoto-mbid",
+            "name": "秋元薫",
+            "sort-name": "Akimoto, Kaoru",
+            "aliases": [{"name": "Kaoru Akimoto"}],
+        }]},
+    ]
+    queries = []
+    monkeypatch.setattr(
+        spotify,
+        "_musicbrainz_get",
+        lambda _path, params: queries.append(params["query"]) or responses.pop(0),
+    )
+
+    assert spotify._musicbrainz_artist_ids("Kaoru Akimoto") == {"akimoto-mbid"}
+    assert queries == ['artist:"Kaoru Akimoto"', "Kaoru Akimoto"]
+
+
+def test_artist_id_resolver_accepts_exact_alias_from_field_search(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        spotify,
+        "_musicbrainz_get",
+        lambda _path, params: calls.append(params["query"]) or {
+            "artists": [{
+                "id": "yuko-mbid",
+                "name": "今井優子",
+                "aliases": [{"name": "Yuko Imai"}],
+            }]
+        },
+    )
+
+    assert spotify._musicbrainz_artist_ids("Yuko Imai") == {"yuko-mbid"}
+    assert calls == ['artist:"Yuko Imai"']
+
+
+def test_artist_id_resolver_rejects_unrelated_fuzzy_results(monkeypatch):
+    responses = [
+        {"artists": [{"id": "one", "name": "Omega Tribe Tribute", "aliases": []}]},
+        {"artists": [{"id": "two", "name": "Omega", "aliases": [{"name": "Other Band"}]}]},
+    ]
+    monkeypatch.setattr(
+        spotify,
+        "_musicbrainz_get",
+        lambda _path, _params: responses.pop(0),
+    )
+
+    assert spotify._musicbrainz_artist_ids("1986 OMEGA TRIBE") == set()
+
+
+def test_artist_identity_can_intersect_japanese_and_romanized_alias_results(monkeypatch):
+    payloads = {
+        'artist:"秋元薫"': {
+            "artists": [{"id": "akimoto-mbid", "name": "秋元薫", "aliases": []}]
+        },
+        'artist:"Kaoru Akimoto"': {
+            "artists": [{
+                "id": "akimoto-mbid",
+                "name": "秋元薫",
+                "aliases": [{"name": "Kaoru Akimoto"}],
+            }]
+        },
+    }
+    monkeypatch.setattr(
+        spotify,
+        "_musicbrainz_get",
+        lambda _path, params: payloads[params["query"]],
+    )
+
+    assert spotify._musicbrainz_artist_identity(
+        ["秋元薫"], [{"name": "Kaoru Akimoto"}]
+    ) == {"akimoto-mbid"}
