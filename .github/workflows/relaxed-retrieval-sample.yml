@@ -1,0 +1,44 @@
+name: Relaxed Retrieval Sample
+
+on:
+  push:
+    branches:
+      - diagnostic/relaxed-retrieval-sample
+    paths:
+      - src/relaxed_retrieval_sample.py
+      - .github/workflows/relaxed-retrieval-sample.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sample:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Probe relaxed retrieval
+        env:
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+        run: python -m src.relaxed_retrieval_sample
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relaxed-retrieval-sample
+          path: relaxed_retrieval_sample.json
+          if-no-files-found: error
