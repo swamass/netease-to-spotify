@@ -5,6 +5,7 @@ on:
     branches:
       - retrieval/second-query-strategy-diagnostic
     paths:
+      - src/retrieval_query_probe.py
       - src/retrieval_strategy_diagnostic.py
       - .github/workflows/retrieval-second-query-diagnostic.yml
   workflow_dispatch:
@@ -16,7 +17,7 @@ permissions:
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -45,23 +46,23 @@ jobs:
           test -f prior-retrieval/retrieval_benchmark.json
           test -f prior-replay/matcher_replay.json
 
-      - name: Compare second-query retrieval strategies
+      - name: Probe second-query retrieval strategies
         env:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
         run: >-
-          python -m src.retrieval_strategy_diagnostic
+          python -m src.retrieval_query_probe
           prior-retrieval/retrieval_benchmark.json
           prior-replay/matcher_replay.json
           data/tunemymusic_missing_7.txt
-          --json retrieval_second_query_diagnostic.json
-          --delay 0.3
+          --json retrieval_query_probe.json
+          --delay 0.2
 
       - name: Upload diagnostic report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: retrieval-second-query-diagnostic
-          path: retrieval_second_query_diagnostic.json
+          name: retrieval-query-probe
+          path: retrieval_query_probe.json
           if-no-files-found: error
