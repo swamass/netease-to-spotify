@@ -1,0 +1,44 @@
+name: Romanized Retrieval Spot Check
+
+on:
+  push:
+    branches:
+      - retrieval/romanized-artist-query
+    paths:
+      - src/romanized_retrieval_spotcheck.py
+      - .github/workflows/romanized-retrieval-spotcheck.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  spotcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Run read-only spot check
+        env:
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+        run: python -m src.romanized_retrieval_spotcheck
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: romanized-retrieval-spotcheck
+          path: romanized_retrieval_spotcheck.json
+          if-no-files-found: error
