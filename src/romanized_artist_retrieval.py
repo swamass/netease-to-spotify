@@ -14,6 +14,7 @@ from types import ModuleType
 
 def apply(spotify: ModuleType) -> None:
     original_search_track = spotify.search_track
+    artist_record_cache: dict[str, dict | None] = {}
 
     def latin_only(value: str) -> bool:
         return bool(re.search(r"[A-Za-z]", value)) and not (
@@ -28,56 +29,74 @@ def apply(spotify: ModuleType) -> None:
                 return f"{given} {family}"
         return value
 
-    def retrieval_artist_name(source_artist: str) -> str | None:
+    def retrieval_artist_record(source_artist: str) -> dict | None:
+        key = spotify._normalize_text(source_artist)
+        if key in artist_record_cache:
+            return artist_record_cache[key]
         if not source_artist or not (
             spotify._contains_cjk(source_artist)
             or spotify._contains_kana(source_artist)
         ):
+            artist_record_cache[key] = None
             return None
 
         artist_ids = spotify._musicbrainz_artist_ids(source_artist)
-        if not artist_ids:
+        if len(artist_ids) != 1:
+            artist_record_cache[key] = None
+            return None
+
+        mbid = next(iter(artist_ids))
+        data = spotify._musicbrainz_get(
+            f"artist/{mbid}",
+            {"fmt": "json", "inc": "aliases"},
+        )
+        if not data:
+            artist_record_cache[key] = None
             return None
 
         candidates: list[tuple[int, str]] = []
-        for mbid in sorted(artist_ids):
-            data = spotify._musicbrainz_get(
-                f"artist/{mbid}",
-                {"fmt": "json", "inc": "aliases"},
-            )
-            if not data:
-                continue
+        canonical = data.get("name", "")
+        sort_name = data.get("sort-name", "")
+        aliases = [
+            alias.get("name", "")
+            for alias in data.get("aliases", [])
+            if alias.get("name")
+        ]
 
-            canonical = data.get("name", "")
-            sort_name = data.get("sort-name", "")
-            aliases = [
-                alias.get("name", "")
-                for alias in data.get("aliases", [])
-                if alias.get("name")
-            ]
-
-            for alias in aliases:
-                shown = display_name(alias)
-                if latin_only(shown):
-                    candidates.append((30 if "," not in alias else 20, shown))
-            if sort_name:
-                shown = display_name(sort_name)
-                if latin_only(shown):
-                    candidates.append((25 if "," in sort_name else 15, shown))
-            if canonical:
-                shown = display_name(canonical)
-                if latin_only(shown):
-                    candidates.append((10, shown))
+        for alias in aliases:
+            shown = display_name(alias)
+            if latin_only(shown):
+                candidates.append((30 if "," not in alias else 20, shown))
+        if sort_name:
+            shown = display_name(sort_name)
+            if latin_only(shown):
+                candidates.append((25 if "," in sort_name else 15, shown))
+        if canonical:
+            shown = display_name(canonical)
+            if latin_only(shown):
+                candidates.append((10, shown))
 
         if not candidates:
+            artist_record_cache[key] = None
             return None
 
         _, chosen = max(
             candidates,
             key=lambda pair: (pair[0], -len(pair[1]), pair[1].casefold()),
         )
-        return chosen
+        record = {
+            "mbid": mbid,
+            "data": data,
+            "display_name": chosen,
+        }
+        artist_record_cache[key] = record
+        return record
 
+    def retrieval_artist_name(source_artist: str) -> str | None:
+        record = retrieval_artist_record(source_artist)
+        return record["display_name"] if record else None
+
+    spotify._musicbrainz_retrieval_artist_record = retrieval_artist_record
     spotify._musicbrainz_retrieval_artist_name = retrieval_artist_name
 
     def search_track(
@@ -89,9 +108,7 @@ def apply(spotify: ModuleType) -> None:
         *,
         diagnostics: dict | None = None,
     ) -> str | None:
-        retrieval_name = (
-            retrieval_artist_name(artists[0]) if artists else None
-        )
+        retrieval_name = retrieval_artist_name(artists[0]) if artists else None
         if not retrieval_name:
             return original_search_track(
                 access_token,
@@ -117,11 +134,7 @@ def apply(spotify: ModuleType) -> None:
                     source_field = f'artist:"{source_query_artist}"'
                     alternate_field = f'artist:"{alternate_query_artist}"'
                     if source_field in q:
-                        rewritten["q"] = q.replace(
-                            source_field,
-                            alternate_field,
-                            1,
-                        )
+                        rewritten["q"] = q.replace(source_field, alternate_field, 1)
                         print(
                             "Spotify retrieval artist fallback: "
                             f"source_artist={artists[0]} "
