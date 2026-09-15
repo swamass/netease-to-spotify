@@ -1,10 +1,10 @@
 """Conservative retrieval policy for cross-script artist recall.
 
 The existing strict first Spotify search remains untouched. Only when that
-search returns zero raw candidates do we relax query #2 from a strict
-``artist:`` field to free artist text and use the simplified title. This keeps
-the production budget at two Spotify searches and leaves all matcher safety
-checks in place.
+search returns zero raw candidates, and the source artist uses CJK or kana, do
+we relax query #2 from a strict ``artist:`` field to free artist text. This
+keeps the production budget at two Spotify searches and leaves all matcher
+safety checks in place. Latin-script artists retain the original query flow.
 """
 
 from __future__ import annotations
@@ -27,6 +27,10 @@ def apply(spotify: ModuleType) -> None:
         inner_get = spotify._spotify_get
         spotify_search_count = 0
         first_search_empty = False
+        source_artist_has_asian_script = any(
+            spotify._contains_cjk(artist) or spotify._contains_kana(artist)
+            for artist in artists
+        )
 
         def retrieval_get(url: str, token: str, params: dict):
             nonlocal spotify_search_count, first_search_empty
@@ -35,10 +39,12 @@ def apply(spotify: ModuleType) -> None:
 
             spotify_search_count += 1
             effective_params = dict(params)
-            if spotify_search_count == 2 and first_search_empty:
-                title = spotify._spotify_query_value(
-                    spotify._title_core(name) or name
-                )
+            if (
+                spotify_search_count == 2
+                and first_search_empty
+                and source_artist_has_asian_script
+            ):
+                title = spotify._spotify_query_value(name)
                 artist_text = " ".join(
                     spotify._spotify_query_value(artist)
                     for artist in artists
