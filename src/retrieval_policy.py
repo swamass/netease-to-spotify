@@ -25,17 +25,13 @@ def apply(spotify: ModuleType) -> None:
         )
 
     def normalize_sort_name(value: str) -> str:
-        """Convert MusicBrainz 'Family, Given' sort names to display order."""
         parts = [part.strip() for part in value.split(",")]
         if len(parts) == 2 and all(parts):
             return f"{parts[1]} {parts[0]}"
         return value.strip()
 
     def artist_names(artist: dict) -> set[str]:
-        values = {
-            artist.get("name", ""),
-            artist.get("sort-name", ""),
-        }
+        values = {artist.get("name", ""), artist.get("sort-name", "")}
         values.update(
             alias.get("name", "")
             for alias in artist.get("aliases", [])
@@ -99,12 +95,14 @@ def apply(spotify: ModuleType) -> None:
             retrieval_name_cache[key] = None
             return None
 
-        params = {
-            "query": f'artist:"{source_artist}"',
-            "fmt": "json",
-            "limit": "5",
-        }
-        data = spotify._musicbrainz_get("artist", params)
+        data = spotify._musicbrainz_get(
+            "artist",
+            {
+                "query": f'artist:"{source_artist}"',
+                "fmt": "json",
+                "limit": "5",
+            },
+        )
         rows = exact_artist_rows(data, source_artist)
         if not rows:
             data = spotify._musicbrainz_get(
@@ -130,6 +128,7 @@ def apply(spotify: ModuleType) -> None:
         return display
 
     spotify._musicbrainz_retrieval_artist_name = retrieval_artist_name
+    spotify._musicbrainz_retrieval_name_cache = retrieval_name_cache
 
     def search_track(
         access_token: str,
