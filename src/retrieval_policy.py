@@ -14,6 +14,7 @@ from types import ModuleType
 
 def apply(spotify: ModuleType) -> None:
     original_search_track = spotify.search_track
+    retrieval_name_cache: dict[str, str | None] = {}
 
     def is_latin_display_name(value: str) -> bool:
         return bool(
@@ -30,37 +31,39 @@ def apply(spotify: ModuleType) -> None:
             return f"{parts[1]} {parts[0]}"
         return value.strip()
 
-    def retrieval_artist_name(source_artist: str) -> str | None:
-        if not source_artist or not (
-            spotify._contains_cjk(source_artist)
-            or spotify._contains_kana(source_artist)
-        ):
-            return None
-
-        artist_ids = spotify._musicbrainz_artist_ids(source_artist)
-        if len(artist_ids) != 1:
-            return None
-
-        mbid = next(iter(artist_ids))
-        data = spotify._musicbrainz_get(
-            f"artist/{mbid}",
-            {"fmt": "json", "inc": "aliases"},
+    def artist_names(artist: dict) -> set[str]:
+        values = {
+            artist.get("name", ""),
+            artist.get("sort-name", ""),
+        }
+        values.update(
+            alias.get("name", "")
+            for alias in artist.get("aliases", [])
+            if alias.get("name")
         )
-        if not data:
-            return None
+        return {
+            spotify._normalize_text(value)
+            for value in values
+            if value
+        }
 
+    def exact_artist_rows(data: dict | None, source_artist: str) -> list[dict]:
+        source_key = spotify._normalize_text(source_artist)
+        return [
+            artist
+            for artist in (data or {}).get("artists", [])
+            if artist.get("id") and source_key in artist_names(artist)
+        ]
+
+    def choose_display_name(data: dict, source_artist: str) -> str | None:
         candidates: list[tuple[int, str]] = []
         for alias in data.get("aliases", []):
             raw = (alias.get("name") or "").strip()
             if not is_latin_display_name(raw):
                 continue
             display = normalize_sort_name(raw)
-            if not is_latin_display_name(display):
-                continue
-            # A ready-made non-comma alias is strongest evidence because it is
-            # already a display form rather than a database sort key.
-            priority = 0 if "," not in raw else 2
-            candidates.append((priority, display))
+            if is_latin_display_name(display):
+                candidates.append((0 if "," not in raw else 2, display))
 
         sort_name = (data.get("sort-name") or "").strip()
         if is_latin_display_name(sort_name):
@@ -81,10 +84,50 @@ def apply(spotify: ModuleType) -> None:
             previous = unique.get(key)
             if previous is None or priority < previous[0]:
                 unique[key] = (priority, value)
-
         if not unique:
             return None
         return min(unique.values(), key=lambda item: (item[0], len(item[1])))[1]
+
+    def retrieval_artist_name(source_artist: str) -> str | None:
+        key = spotify._normalize_text(source_artist)
+        if key in retrieval_name_cache:
+            return retrieval_name_cache[key]
+        if not source_artist or not (
+            spotify._contains_cjk(source_artist)
+            or spotify._contains_kana(source_artist)
+        ):
+            retrieval_name_cache[key] = None
+            return None
+
+        params = {
+            "query": f'artist:"{source_artist}"',
+            "fmt": "json",
+            "limit": "5",
+        }
+        data = spotify._musicbrainz_get("artist", params)
+        rows = exact_artist_rows(data, source_artist)
+        if not rows:
+            data = spotify._musicbrainz_get(
+                "artist",
+                {"query": source_artist, "fmt": "json", "limit": "5"},
+            )
+            rows = exact_artist_rows(data, source_artist)
+        if len(rows) != 1:
+            retrieval_name_cache[key] = None
+            return None
+
+        row = rows[0]
+        display = choose_display_name(row, source_artist)
+        if not display:
+            detail = spotify._musicbrainz_get(
+                f"artist/{row['id']}",
+                {"fmt": "json", "inc": "aliases"},
+            )
+            if detail:
+                display = choose_display_name(detail, source_artist)
+
+        retrieval_name_cache[key] = display
+        return display
 
     spotify._musicbrainz_retrieval_artist_name = retrieval_artist_name
 
