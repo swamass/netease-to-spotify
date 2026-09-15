@@ -1,5 +1,14 @@
+import pytest
+
 from src import spotify
 from src.cross_language_retrieval import _display_from_sort_name
+
+
+@pytest.fixture(autouse=True)
+def clear_retrieval_artist_cache():
+    spotify._cross_language_retrieval_cache.clear()
+    yield
+    spotify._cross_language_retrieval_cache.clear()
 
 
 class FakeResponse:
@@ -58,6 +67,27 @@ def test_retrieval_artist_uses_reordered_sort_name(monkeypatch):
         },
     )
     assert spotify._cross_language_retrieval_artist("角松敏生") == "Toshiki Kadomatsu"
+
+
+def test_retrieval_artist_is_cached_per_source_artist(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        spotify,
+        "_musicbrainz_artist_ids",
+        lambda name: calls.append(name) or {"mbid"},
+    )
+    monkeypatch.setattr(
+        spotify,
+        "_musicbrainz_get",
+        lambda _path, _params: {
+            "name": "角松敏生",
+            "sort-name": "Kadomatsu, Toshiki",
+            "aliases": [],
+        },
+    )
+    assert spotify._cross_language_retrieval_artist("角松敏生") == "Toshiki Kadomatsu"
+    assert spotify._cross_language_retrieval_artist("角松敏生") == "Toshiki Kadomatsu"
+    assert calls == ["角松敏生"]
 
 
 def test_retrieval_artist_requires_single_exact_mbid(monkeypatch):
