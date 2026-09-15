@@ -17,7 +17,7 @@ from types import ModuleType
 
 def apply(spotify: ModuleType) -> None:
     original_search_track = spotify.search_track
-    retrieval_alias_cache: dict[str, str | None] = {}
+    retrieval_alias_cache: dict[tuple[str, int], str | None] = {}
     spotify._retrieval_artist_alias_cache = retrieval_alias_cache
 
     def is_latin_display_name(value: str) -> bool:
@@ -57,7 +57,12 @@ def apply(spotify: ModuleType) -> None:
         ):
             return None
 
-        cache_key = spotify._normalize_text(source_name)
+        # Including the getter identity keeps the production cache stable while
+        # naturally isolating tests or alternate providers that monkeypatch it.
+        cache_key = (
+            spotify._normalize_text(source_name),
+            id(spotify._musicbrainz_get),
+        )
         if cache_key in retrieval_alias_cache:
             return retrieval_alias_cache[cache_key]
 
