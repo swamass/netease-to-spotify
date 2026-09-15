@@ -13,6 +13,7 @@ on:
       - "tests/test_spotify_matching.py"
       - "tests/test_matcher_policy.py"
       - "tests/test_retrieval_policy.py"
+      - "tests/test_retrieval_policy_hardening.py"
       - "tests/test_retrieval_benchmark.py"
       - "requirements.txt"
       - ".github/workflows/matching-tests.yml"
