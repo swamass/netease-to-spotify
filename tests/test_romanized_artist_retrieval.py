@@ -1,4 +1,13 @@
+import pytest
+
 from src import spotify
+
+
+@pytest.fixture(autouse=True)
+def reset_retrieval_cache():
+    spotify._clear_musicbrainz_retrieval_artist_cache()
+    yield
+    spotify._clear_musicbrainz_retrieval_artist_cache()
 
 
 class FakeResponse:
