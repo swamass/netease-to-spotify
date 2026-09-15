@@ -2,8 +2,9 @@
 
 The first Spotify query stays unchanged. For Asian-script source artists, the
 second query may replace only the artist field with a verified Latin-script
-MusicBrainz canonical/alias name. This does not add Spotify Search requests and
-does not change matcher acceptance rules.
+MusicBrainz canonical/alias name. The alternate name is resolved lazily, only
+when the matcher actually reaches search #2. This does not add Spotify Search
+requests and does not change matcher acceptance rules.
 """
 
 from __future__ import annotations
@@ -112,19 +113,8 @@ def apply(spotify: ModuleType) -> None:
         *,
         diagnostics: dict | None = None,
     ) -> str | None:
-        retrieval_name = retrieval_artist_name(artists[0]) if artists else None
-        if not retrieval_name:
-            return original_search_track(
-                access_token,
-                name,
-                artists,
-                album,
-                duration_ms,
-                diagnostics=diagnostics,
-            )
-
-        source_query_artist = spotify._spotify_query_value(artists[0])
-        alternate_query_artist = spotify._spotify_query_value(retrieval_name)
+        source_artist = artists[0] if artists else ""
+        source_query_artist = spotify._spotify_query_value(source_artist)
         original_get = spotify._spotify_get
         search_number = 0
 
@@ -133,17 +123,26 @@ def apply(spotify: ModuleType) -> None:
             rewritten = dict(params)
             if url.endswith("/search"):
                 search_number += 1
-                if search_number == 2:
-                    q = str(rewritten.get("q", ""))
-                    source_field = f'artist:"{source_query_artist}"'
-                    alternate_field = f'artist:"{alternate_query_artist}"'
-                    if source_field in q:
-                        rewritten["q"] = q.replace(source_field, alternate_field, 1)
-                        print(
-                            "Spotify retrieval artist fallback: "
-                            f"source_artist={artists[0]} "
-                            f"search_artist={retrieval_name}"
+                if search_number == 2 and source_artist:
+                    retrieval_name = retrieval_artist_name(source_artist)
+                    if retrieval_name:
+                        alternate_query_artist = spotify._spotify_query_value(
+                            retrieval_name
                         )
+                        q = str(rewritten.get("q", ""))
+                        source_field = f'artist:"{source_query_artist}"'
+                        alternate_field = f'artist:"{alternate_query_artist}"'
+                        if source_field in q:
+                            rewritten["q"] = q.replace(
+                                source_field,
+                                alternate_field,
+                                1,
+                            )
+                            print(
+                                "Spotify retrieval artist fallback: "
+                                f"source_artist={source_artist} "
+                                f"search_artist={retrieval_name}"
+                            )
             return original_get(url, token, rewritten)
 
         try:
