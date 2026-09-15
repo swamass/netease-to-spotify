@@ -39,14 +39,21 @@ def _display_from_sort_name(value: str) -> str | None:
 
 def apply(spotify: ModuleType) -> None:
     original_search_track = spotify.search_track
+    retrieval_artist_cache: dict[str, str | None] = {}
+    spotify._cross_language_retrieval_cache = retrieval_artist_cache
 
     def cross_language_retrieval_artist(source_artist: str) -> str | None:
         """Return a conservative Latin display name for the exact MB artist."""
         if not source_artist or not _has_asian_script(source_artist):
             return None
 
+        cache_key = spotify._normalize_text(source_artist)
+        if cache_key in retrieval_artist_cache:
+            return retrieval_artist_cache[cache_key]
+
         artist_ids = spotify._musicbrainz_artist_ids(source_artist)
         if len(artist_ids) != 1:
+            retrieval_artist_cache[cache_key] = None
             return None
         mbid = next(iter(artist_ids))
         data = spotify._musicbrainz_get(
@@ -54,11 +61,9 @@ def apply(spotify: ModuleType) -> None:
             {"fmt": "json", "inc": "aliases"},
         )
         if not data:
+            retrieval_artist_cache[cache_key] = None
             return None
 
-        # Prefer an explicit Latin alias in natural display order. MusicBrainz
-        # aliases can include locale-specific/native names, so only Latin
-        # values are considered here.
         aliases = [
             (alias.get("name") or "").strip()
             for alias in data.get("aliases", [])
@@ -69,18 +74,24 @@ def apply(spotify: ModuleType) -> None:
             if _looks_latin_display_name(value) and "," not in value
         ]
         if natural_aliases:
-            natural_aliases.sort(key=lambda value: (len(value.split()) < 2, len(value)))
-            return natural_aliases[0]
+            natural_aliases.sort(
+                key=lambda value: (len(value.split()) < 2, len(value))
+            )
+            result = natural_aliases[0]
+            retrieval_artist_cache[cache_key] = result
+            return result
 
-        # The common MusicBrainz fallback is a Latin sort-name such as
-        # ``Yamashita, Tatsuro``. Spotify generally indexes display order.
         sort_display = _display_from_sort_name(data.get("sort-name", ""))
         if sort_display:
+            retrieval_artist_cache[cache_key] = sort_display
             return sort_display
 
         canonical = (data.get("name") or "").strip()
         if _looks_latin_display_name(canonical):
+            retrieval_artist_cache[cache_key] = canonical
             return canonical
+
+        retrieval_artist_cache[cache_key] = None
         return None
 
     spotify._cross_language_retrieval_artist = cross_language_retrieval_artist
@@ -97,10 +108,9 @@ def apply(spotify: ModuleType) -> None:
         inner_get = spotify._spotify_get
         search_count = 0
         first_search_was_empty = False
-        alternate_artist: str | None = None
 
         def retrieval_get(url: str, token: str, params: dict):
-            nonlocal search_count, first_search_was_empty, alternate_artist
+            nonlocal search_count, first_search_was_empty
             if not url.endswith("/search"):
                 return inner_get(url, token, params)
 
@@ -120,15 +130,17 @@ def apply(spotify: ModuleType) -> None:
                         f"source_artist={artists[0]} alternate_artist={alternate_artist}"
                     )
                     if diagnostics is not None:
-                        diagnostics.setdefault("signals", []).append(
-                            "CROSS_LANGUAGE_SECOND_QUERY"
-                        )
+                        signals = diagnostics.setdefault("signals", [])
+                        if "CROSS_LANGUAGE_SECOND_QUERY" not in signals:
+                            signals.append("CROSS_LANGUAGE_SECOND_QUERY")
                         diagnostics["cross_language_query_artist"] = alternate_artist
 
             response = inner_get(url, token, request_params)
             if search_count == 1 and response is not None:
                 try:
-                    first_search_was_empty = not response.json().get("tracks", {}).get("items", [])
+                    first_search_was_empty = not response.json().get(
+                        "tracks", {}
+                    ).get("items", [])
                 except (AttributeError, ValueError):
                     first_search_was_empty = False
             return response
