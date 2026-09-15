@@ -2,7 +2,7 @@
 
 This first-stage diagnostic only compares candidate pools. It intentionally
 avoids MusicBrainz and matcher replay so strategy selection is fast and clean.
-A second, narrower diagnostic can validate the chosen strategy end-to-end.
+All searches use Spotify's current 10-result maximum, matching production.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 from . import spotify
 
 
-STRATEGY_NAMES = ("loose_artist_text", "plain_text", "track_only_50")
+STRATEGY_NAMES = ("loose_artist_text", "plain_text", "track_only_10")
 
 
 def _load_json(path: str) -> dict:
@@ -41,17 +41,17 @@ def _query_specs(title: str, artist: str) -> dict[str, dict]:
         "loose_artist_text": {
             "q": f'track:"{title_q}" {artist_q}',
             "type": "track",
-            "limit": 20,
+            "limit": 10,
         },
         "plain_text": {
             "q": f'"{title_q}" {artist_q}',
             "type": "track",
-            "limit": 20,
+            "limit": 10,
         },
-        "track_only_50": {
+        "track_only_10": {
             "q": f'track:"{title_q}"',
             "type": "track",
-            "limit": 50,
+            "limit": 10,
         },
     }
 
@@ -75,7 +75,10 @@ def _quick_signals(song: dict[str, str], items: list[dict]) -> dict:
     hard_artist_conflicts = []
     for rank, item in enumerate(items, 1):
         title_match = spotify._title_match(song["title"], item.get("name", ""))
-        title_exact = spotify._normalize_text(spotify._title_core(song["title"])) in spotify._title_keys(item.get("name", ""))
+        title_exact = (
+            spotify._normalize_text(spotify._title_core(song["title"]))
+            in spotify._title_keys(item.get("name", ""))
+        )
         artist_score, _, artist_reliable = spotify._artist_match_score(
             [song["artist"]], item.get("artists", [])
         )
@@ -178,7 +181,7 @@ def diagnose(
             row["strategies"][strategy_name] = {
                 "query": params["q"],
                 "candidate_count": len(items),
-                "candidates": [_candidate(item, rank) for rank, item in enumerate(items[:15], 1)],
+                "candidates": [_candidate(item, rank) for rank, item in enumerate(items, 1)],
                 **signals,
             }
         report["tracks"].append(row)
