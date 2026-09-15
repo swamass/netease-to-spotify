@@ -1,10 +1,11 @@
 """Conservative retrieval policy for cross-script artist recall.
 
 The strict first Spotify search remains untouched. Only when that search
-returns zero raw candidates and the source artist uses CJK or kana do we alter
-query #2. A trustworthy MusicBrainz-derived Latin artist name is preferred;
-otherwise we retain the existing free-artist-text fallback. The production
-budget remains at two Spotify searches and matcher safety checks are unchanged.
+successfully returns zero raw candidates and the source artist uses CJK or
+kana do we alter query #2. A trustworthy MusicBrainz-derived Latin artist name
+is preferred; otherwise we retain the existing free-artist-text fallback. The
+production budget remains at two Spotify searches and matcher safety checks are
+unchanged.
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ from types import ModuleType
 
 def apply(spotify: ModuleType) -> None:
     original_search_track = spotify.search_track
+    retrieval_alias_cache: dict[str, str | None] = {}
+    spotify._retrieval_artist_alias_cache = retrieval_alias_cache
 
     def is_latin_display_name(value: str) -> bool:
         normalized = unicodedata.normalize("NFKC", value).strip()
@@ -54,6 +57,11 @@ def apply(spotify: ModuleType) -> None:
         ):
             return None
 
+        cache_key = spotify._normalize_text(source_name)
+        if cache_key in retrieval_alias_cache:
+            return retrieval_alias_cache[cache_key]
+
+        result: str | None = None
         data = spotify._musicbrainz_get(
             "artist",
             {"query": f'artist:"{source_name}"', "fmt": "json", "limit": "5"},
@@ -63,8 +71,6 @@ def apply(spotify: ModuleType) -> None:
             for artist in (data or {}).get("artists", [])
             if exact_source_artist(artist, source_name)
         ]
-        if not exact_results:
-            return None
 
         for artist in exact_results:
             natural_sort = naturalize_sort_name(artist.get("sort-name", ""))
@@ -73,7 +79,8 @@ def apply(spotify: ModuleType) -> None:
                 and spotify._normalize_text(natural_sort)
                 != spotify._normalize_text(source_name)
             ):
-                return natural_sort
+                result = natural_sort
+                break
 
             canonical = artist.get("name", "")
             if (
@@ -81,7 +88,8 @@ def apply(spotify: ModuleType) -> None:
                 and spotify._normalize_text(canonical)
                 != spotify._normalize_text(source_name)
             ):
-                return canonical
+                result = canonical
+                break
 
             for alias in artist.get("aliases", []):
                 alias_name = alias.get("name", "")
@@ -90,7 +98,10 @@ def apply(spotify: ModuleType) -> None:
                     and spotify._normalize_text(alias_name)
                     != spotify._normalize_text(source_name)
                 ):
-                    return naturalize_sort_name(alias_name) or alias_name
+                    result = naturalize_sort_name(alias_name) or alias_name
+                    break
+            if result:
+                break
 
             mbid = artist.get("id")
             if not mbid:
@@ -107,14 +118,16 @@ def apply(spotify: ModuleType) -> None:
                 and spotify._normalize_text(natural_sort)
                 != spotify._normalize_text(source_name)
             ):
-                return natural_sort
+                result = natural_sort
+                break
             canonical = detail.get("name", "")
             if (
                 is_latin_display_name(canonical)
                 and spotify._normalize_text(canonical)
                 != spotify._normalize_text(source_name)
             ):
-                return canonical
+                result = canonical
+                break
             for alias in detail.get("aliases", []):
                 alias_name = alias.get("name", "")
                 if (
@@ -122,8 +135,13 @@ def apply(spotify: ModuleType) -> None:
                     and spotify._normalize_text(alias_name)
                     != spotify._normalize_text(source_name)
                 ):
-                    return naturalize_sort_name(alias_name) or alias_name
-        return None
+                    result = naturalize_sort_name(alias_name) or alias_name
+                    break
+            if result:
+                break
+
+        retrieval_alias_cache[cache_key] = result
+        return result
 
     def retrieval_title(name: str) -> str:
         core = spotify._title_core(name)
@@ -201,15 +219,24 @@ def apply(spotify: ModuleType) -> None:
                 effective_params["q"] = query
                 effective_params["limit"] = 10
                 if diagnostics is not None:
-                    diagnostics.setdefault("signals", []).append(signal)
+                    signals = diagnostics.setdefault("signals", [])
+                    if signal not in signals:
+                        signals.append(signal)
                     diagnostics["relaxed_second_query"] = query
 
             response = inner_get(url, token, effective_params)
             if spotify_search_count == 1:
-                payload = {} if response is None else response.json()
-                first_search_empty = not bool(
-                    payload.get("tracks", {}).get("items", [])
-                )
+                # A transport/API failure is not evidence that the strict
+                # query had zero results, so never broaden on ``None``.
+                if response is None:
+                    first_search_empty = False
+                else:
+                    try:
+                        first_search_empty = not bool(
+                            response.json().get("tracks", {}).get("items", [])
+                        )
+                    except (AttributeError, ValueError):
+                        first_search_empty = False
             return response
 
         try:
