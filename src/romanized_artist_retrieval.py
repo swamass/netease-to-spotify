@@ -1,10 +1,10 @@
 """Use a MusicBrainz romanized artist name for Spotify search #2.
 
-The first Spotify query stays unchanged. For Asian-script source artists, the
-second query may replace only the artist field with a verified Latin-script
-MusicBrainz canonical/alias name. The alternate name is resolved lazily, only
-when the matcher actually reaches search #2. This does not add Spotify Search
-requests and does not change matcher acceptance rules.
+The first Spotify query stays unchanged. Only when that search returns zero
+candidates may an Asian-script source artist be replaced in search #2 with a
+verified Latin-script MusicBrainz canonical/alias name. The alternate name is
+resolved lazily, so successful first-query matches pay no MusicBrainz cost.
+This does not add Spotify Search requests and does not change matcher rules.
 """
 
 from __future__ import annotations
@@ -117,13 +117,19 @@ def apply(spotify: ModuleType) -> None:
         source_query_artist = spotify._spotify_query_value(source_artist)
         original_get = spotify._spotify_get
         search_number = 0
+        first_search_had_candidates: bool | None = None
 
         def query_rewriting_get(url: str, token: str, params: dict):
-            nonlocal search_number
+            nonlocal search_number, first_search_had_candidates
             rewritten = dict(params)
-            if url.endswith("/search"):
+            is_search = url.endswith("/search")
+            if is_search:
                 search_number += 1
-                if search_number == 2 and source_artist:
+                if (
+                    search_number == 2
+                    and first_search_had_candidates is False
+                    and source_artist
+                ):
                     retrieval_name = retrieval_artist_name(source_artist)
                     if retrieval_name:
                         alternate_query_artist = spotify._spotify_query_value(
@@ -143,7 +149,16 @@ def apply(spotify: ModuleType) -> None:
                                 f"source_artist={source_artist} "
                                 f"search_artist={retrieval_name}"
                             )
-            return original_get(url, token, rewritten)
+
+            response = original_get(url, token, rewritten)
+            if is_search and search_number == 1:
+                if response is None:
+                    first_search_had_candidates = None
+                else:
+                    first_search_had_candidates = bool(
+                        response.json().get("tracks", {}).get("items", [])
+                    )
+            return response
 
         try:
             spotify._spotify_get = query_rewriting_get
