@@ -144,3 +144,36 @@ def test_only_second_spotify_search_uses_romanized_artist(monkeypatch):
     assert 'artist:"来生たかお"' in queries[0]
     assert 'artist:"Takao Kisugi"' in queries[1]
     assert 'artist:"来生たかお"' not in queries[1]
+
+
+def test_first_query_match_does_not_resolve_romanized_artist(monkeypatch):
+    mb_artist_lookup_called = False
+
+    def fail_if_called(_name):
+        nonlocal mb_artist_lookup_called
+        mb_artist_lookup_called = True
+        return {"artist-mbid"}
+
+    monkeypatch.setattr(spotify, "_musicbrainz_artist_ids", fail_if_called)
+    item = _candidate(title="Sparkle", artist="山下達郎")
+    queries = []
+
+    def fake_spotify_get(url, _token, params):
+        assert url.endswith("/search")
+        queries.append(params["q"])
+        return FakeResponse([item])
+
+    monkeypatch.setattr(spotify, "_spotify_get", fake_spotify_get)
+
+    result = spotify.search_track(
+        "token",
+        "Sparkle",
+        ["山下達郎"],
+        "Album",
+        duration_ms=240000,
+    )
+
+    assert result == "match"
+    assert len(queries) == 1
+    assert 'artist:"山下達郎"' in queries[0]
+    assert mb_artist_lookup_called is False
