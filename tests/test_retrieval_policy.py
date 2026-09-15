@@ -86,7 +86,7 @@ def test_second_query_uses_romanized_artist_and_simplified_title(monkeypatch):
     assert len(queries) == 2
     assert 'artist:"松原みき"' in queries[0]
     assert 'album:"Pocket Park"' in queries[0]
-    assert queries[1] == 'track:"真夜中のドア~stay with me" artist:"Miki Matsubara"'
+    assert queries[1] == 'track:"真夜中のドア〜stay with me" artist:"Miki Matsubara"'
 
 
 def test_second_query_falls_back_to_original_artist_without_safe_alias(monkeypatch):
