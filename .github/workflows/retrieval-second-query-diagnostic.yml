@@ -5,8 +5,7 @@ on:
     branches:
       - retrieval/second-query-strategy-diagnostic
     paths:
-      - src/retrieval_query_probe.py
-      - src/retrieval_strategy_diagnostic.py
+      - src/track_only_replay_diagnostic.py
       - .github/workflows/retrieval-second-query-diagnostic.yml
   workflow_dispatch:
 
@@ -17,7 +16,7 @@ permissions:
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -46,23 +45,18 @@ jobs:
           test -f prior-retrieval/retrieval_benchmark.json
           test -f prior-replay/matcher_replay.json
 
-      - name: Probe second-query retrieval strategies
-        env:
-          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
-          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
-          SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+      - name: Replay saved track-only candidates as query two
         run: >-
-          python -m src.retrieval_query_probe
+          python -m src.track_only_replay_diagnostic
           prior-retrieval/retrieval_benchmark.json
           prior-replay/matcher_replay.json
           data/tunemymusic_missing_7.txt
-          --json retrieval_query_probe.json
-          --delay 0.2
+          --json track_only_replay_diagnostic.json
 
       - name: Upload diagnostic report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: retrieval-query-probe
-          path: retrieval_query_probe.json
+          name: track-only-replay-diagnostic
+          path: track_only_replay_diagnostic.json
           if-no-files-found: error
