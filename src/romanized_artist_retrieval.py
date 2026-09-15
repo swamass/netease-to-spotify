@@ -16,6 +16,9 @@ def apply(spotify: ModuleType) -> None:
     original_search_track = spotify.search_track
     artist_record_cache: dict[str, dict | None] = {}
 
+    def clear_cache() -> None:
+        artist_record_cache.clear()
+
     def latin_only(value: str) -> bool:
         return bool(re.search(r"[A-Za-z]", value)) and not (
             spotify._contains_cjk(value) or spotify._contains_kana(value)
@@ -96,6 +99,7 @@ def apply(spotify: ModuleType) -> None:
         record = retrieval_artist_record(source_artist)
         return record["display_name"] if record else None
 
+    spotify._clear_musicbrainz_retrieval_artist_cache = clear_cache
     spotify._musicbrainz_retrieval_artist_record = retrieval_artist_record
     spotify._musicbrainz_retrieval_artist_name = retrieval_artist_name
 
