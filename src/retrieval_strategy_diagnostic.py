@@ -1,19 +1,15 @@
-"""Compare broad second-query retrieval strategies without writing playlists.
+"""Compare broad second-query Spotify retrieval strategies without playlist writes.
 
-Targets TuneMyMusic-success tracks whose saved artist-bound retrieval returned
-no candidates. Each strategy performs one live Spotify Search, then replays the
-returned candidates through the current matcher with the first query empty.
-This approximates replacing only production query #2 while preserving matcher
-safety and the two-search production budget.
+This first-stage diagnostic only compares candidate pools. It intentionally
+avoids MusicBrainz and matcher replay so strategy selection is fast and clean.
+A second, narrower diagnostic can validate the chosen strategy end-to-end.
 """
 
 from __future__ import annotations
 
 import argparse
-import contextlib
 import json
 import time
-from io import StringIO
 from pathlib import Path
 
 from . import spotify
@@ -72,52 +68,30 @@ def _candidate(item: dict, rank: int) -> dict:
     }
 
 
-def _replay_as_second_query(song: dict[str, str], items: list[dict]) -> dict:
-    class Response:
-        def __init__(self, response_items: list[dict]):
-            self.items = response_items
-
-        def json(self):
-            return {"tracks": {"items": self.items}}
-
-    original_get = spotify._spotify_get
-    calls = 0
-    diagnostics: dict = {}
-    output = StringIO()
-
-    def fake_get(*_args, **_kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            return Response([])
-        if calls == 2:
-            return Response(items)
-        return Response([])
-
-    try:
-        spotify._spotify_get = fake_get
-        with contextlib.redirect_stdout(output):
-            accepted = spotify.search_track(
-                "diagnostic",
-                song["title"],
-                [song["artist"]],
-                "",
-                diagnostics=diagnostics,
-            )
-    finally:
-        spotify._spotify_get = original_get
-
-    accepted_rank = None
-    if accepted:
-        for rank, item in enumerate(items, 1):
-            if item.get("id") == accepted:
-                accepted_rank = rank
-                break
+def _quick_signals(song: dict[str, str], items: list[dict]) -> dict:
+    title_matches = []
+    exact_title_matches = []
+    cross_script_uncertain = []
+    hard_artist_conflicts = []
+    for rank, item in enumerate(items, 1):
+        title_match = spotify._title_match(song["title"], item.get("name", ""))
+        title_exact = spotify._normalize_text(spotify._title_core(song["title"])) in spotify._title_keys(item.get("name", ""))
+        artist_score, _, artist_reliable = spotify._artist_match_score(
+            [song["artist"]], item.get("artists", [])
+        )
+        if title_match:
+            title_matches.append(rank)
+        if title_exact:
+            exact_title_matches.append(rank)
+        if title_match and artist_score == 0.35 and not artist_reliable:
+            cross_script_uncertain.append(rank)
+        if title_match and artist_score == 0:
+            hard_artist_conflicts.append(rank)
     return {
-        "accepted_track_id": accepted,
-        "accepted_rank": accepted_rank,
-        "matcher_diagnostics": diagnostics,
-        "matcher_output": output.getvalue().splitlines(),
+        "title_match_ranks": title_matches,
+        "exact_title_match_ranks": exact_title_matches,
+        "cross_script_uncertain_ranks": cross_script_uncertain,
+        "hard_artist_conflict_ranks": hard_artist_conflicts,
     }
 
 
@@ -157,13 +131,16 @@ def diagnose(
 
     report = {
         "scope": "TuneMyMusic-success old replay failures with zero saved artist-bound candidates",
+        "stage": "candidate-pool comparison only",
         "target_count": len(targets),
         "spotify_searches": 0,
         "strategies": {
             name: {
                 "tracks_with_candidates": 0,
-                "matcher_accepted": 0,
-                "accepted_track_ids": [],
+                "tracks_with_title_match": 0,
+                "tracks_with_exact_title_match": 0,
+                "tracks_with_cross_script_uncertain_title_match": 0,
+                "tracks_with_hard_artist_conflict_title_match": 0,
             }
             for name in STRATEGY_NAMES
         },
@@ -191,26 +168,25 @@ def diagnose(
             )
             report["spotify_searches"] += 1
             items = [] if response is None else response.json().get("tracks", {}).get("items", [])
-            if items:
-                report["strategies"][strategy_name]["tracks_with_candidates"] += 1
-            replay_result = _replay_as_second_query(song, items)
-            if replay_result["accepted_track_id"]:
-                report["strategies"][strategy_name]["matcher_accepted"] += 1
-                report["strategies"][strategy_name]["accepted_track_ids"].append(
-                    replay_result["accepted_track_id"]
-                )
+            signals = _quick_signals(song, items)
+            stats = report["strategies"][strategy_name]
+            stats["tracks_with_candidates"] += bool(items)
+            stats["tracks_with_title_match"] += bool(signals["title_match_ranks"])
+            stats["tracks_with_exact_title_match"] += bool(signals["exact_title_match_ranks"])
+            stats["tracks_with_cross_script_uncertain_title_match"] += bool(signals["cross_script_uncertain_ranks"])
+            stats["tracks_with_hard_artist_conflict_title_match"] += bool(signals["hard_artist_conflict_ranks"])
             row["strategies"][strategy_name] = {
                 "query": params["q"],
                 "candidate_count": len(items),
-                "candidates": [_candidate(item, rank) for rank, item in enumerate(items[:10], 1)],
-                **replay_result,
+                "candidates": [_candidate(item, rank) for rank, item in enumerate(items[:15], 1)],
+                **signals,
             }
         report["tracks"].append(row)
         print(
             f"[{target_index + 1}/{len(targets)}] {song['title']} - {song['artist']} | "
             + " | ".join(
                 f"{name}: candidates={row['strategies'][name]['candidate_count']} "
-                f"accepted={'yes' if row['strategies'][name]['accepted_track_id'] else 'no'}"
+                f"title_match={bool(row['strategies'][name]['title_match_ranks'])}"
                 for name in STRATEGY_NAMES
             )
         )
@@ -247,10 +223,7 @@ def main() -> None:
     print(f"Targets: {report['target_count']}")
     print(f"Spotify searches: {report['spotify_searches']}")
     for name, stats in report["strategies"].items():
-        print(
-            f"{name}: tracks_with_candidates={stats['tracks_with_candidates']} "
-            f"matcher_accepted={stats['matcher_accepted']}"
-        )
+        print(name + ": " + json.dumps(stats, ensure_ascii=False))
 
 
 if __name__ == "__main__":
