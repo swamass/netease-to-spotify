@@ -1,0 +1,67 @@
+name: Retrieval Second Query Diagnostic
+
+on:
+  push:
+    branches:
+      - retrieval/second-query-strategy-diagnostic
+    paths:
+      - src/retrieval_strategy_diagnostic.py
+      - .github/workflows/retrieval-second-query-diagnostic.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Download saved benchmark artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p prior-retrieval prior-replay
+          gh run download 34570058054 \
+            --repo "${{ github.repository }}" \
+            --name spotify-retrieval-benchmark \
+            --dir prior-retrieval
+          gh run download 34753411423 \
+            --repo "${{ github.repository }}" \
+            --name matcher-replay \
+            --dir prior-replay
+          test -f prior-retrieval/retrieval_benchmark.json
+          test -f prior-replay/matcher_replay.json
+
+      - name: Compare second-query retrieval strategies
+        env:
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+        run: >-
+          python -m src.retrieval_strategy_diagnostic
+          prior-retrieval/retrieval_benchmark.json
+          prior-replay/matcher_replay.json
+          data/tunemymusic_missing_7.txt
+          --json retrieval_second_query_diagnostic.json
+          --delay 0.3
+
+      - name: Upload diagnostic report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: retrieval-second-query-diagnostic
+          path: retrieval_second_query_diagnostic.json
+          if-no-files-found: error
