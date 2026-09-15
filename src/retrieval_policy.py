@@ -1,19 +1,137 @@
 """Conservative retrieval policy for cross-script artist recall.
 
-The existing strict first Spotify search remains untouched. Only when that
-search returns zero raw candidates, and the source artist uses CJK or kana, do
-we relax query #2 from a strict ``artist:`` field to free artist text. This
-keeps the production budget at two Spotify searches and leaves all matcher
-safety checks in place. Latin-script artists retain the original query flow.
+The strict first Spotify search remains untouched. Only when that search
+returns zero raw candidates and the source artist uses CJK or kana do we alter
+query #2. A trustworthy MusicBrainz-derived Latin artist name is preferred;
+otherwise we retain the existing free-artist-text fallback. The production
+budget remains at two Spotify searches and matcher safety checks are unchanged.
 """
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from types import ModuleType
 
 
 def apply(spotify: ModuleType) -> None:
     original_search_track = spotify.search_track
+
+    def is_latin_display_name(value: str) -> bool:
+        normalized = unicodedata.normalize("NFKC", value).strip()
+        if not normalized:
+            return False
+        if spotify._contains_cjk(normalized) or spotify._contains_kana(normalized):
+            return False
+        return any("a" <= char.casefold() <= "z" for char in normalized)
+
+    def naturalize_sort_name(value: str) -> str | None:
+        value = unicodedata.normalize("NFKC", value).strip()
+        if value.count(",") == 1:
+            family, given = (part.strip() for part in value.split(",", 1))
+            natural = f"{given} {family}".strip()
+            return (
+                natural
+                if family and given and is_latin_display_name(natural)
+                else None
+            )
+        return value if is_latin_display_name(value) else None
+
+    def exact_source_artist(result: dict, source_name: str) -> bool:
+        source_key = spotify._normalize_text(source_name)
+        values = [
+            result.get("name", ""),
+            result.get("sort-name", ""),
+            *(alias.get("name", "") for alias in result.get("aliases", [])),
+        ]
+        return source_key in {
+            spotify._normalize_text(value) for value in values if value
+        }
+
+    def retrieval_artist_alias(source_name: str) -> str | None:
+        if not source_name or not (
+            spotify._contains_cjk(source_name) or spotify._contains_kana(source_name)
+        ):
+            return None
+
+        data = spotify._musicbrainz_get(
+            "artist",
+            {"query": f'artist:"{source_name}"', "fmt": "json", "limit": "5"},
+        )
+        exact_results = [
+            artist
+            for artist in (data or {}).get("artists", [])
+            if exact_source_artist(artist, source_name)
+        ]
+        if not exact_results:
+            return None
+
+        for artist in exact_results:
+            natural_sort = naturalize_sort_name(artist.get("sort-name", ""))
+            if (
+                natural_sort
+                and spotify._normalize_text(natural_sort)
+                != spotify._normalize_text(source_name)
+            ):
+                return natural_sort
+
+            canonical = artist.get("name", "")
+            if (
+                is_latin_display_name(canonical)
+                and spotify._normalize_text(canonical)
+                != spotify._normalize_text(source_name)
+            ):
+                return canonical
+
+            for alias in artist.get("aliases", []):
+                alias_name = alias.get("name", "")
+                if (
+                    is_latin_display_name(alias_name)
+                    and spotify._normalize_text(alias_name)
+                    != spotify._normalize_text(source_name)
+                ):
+                    return naturalize_sort_name(alias_name) or alias_name
+
+            mbid = artist.get("id")
+            if not mbid:
+                continue
+            detail = spotify._musicbrainz_get(
+                f"artist/{mbid}",
+                {"fmt": "json", "inc": "aliases"},
+            )
+            if not detail:
+                continue
+            natural_sort = naturalize_sort_name(detail.get("sort-name", ""))
+            if (
+                natural_sort
+                and spotify._normalize_text(natural_sort)
+                != spotify._normalize_text(source_name)
+            ):
+                return natural_sort
+            canonical = detail.get("name", "")
+            if (
+                is_latin_display_name(canonical)
+                and spotify._normalize_text(canonical)
+                != spotify._normalize_text(source_name)
+            ):
+                return canonical
+            for alias in detail.get("aliases", []):
+                alias_name = alias.get("name", "")
+                if (
+                    is_latin_display_name(alias_name)
+                    and spotify._normalize_text(alias_name)
+                    != spotify._normalize_text(source_name)
+                ):
+                    return naturalize_sort_name(alias_name) or alias_name
+        return None
+
+    def retrieval_title(name: str) -> str:
+        core = spotify._title_core(name)
+        simplified = re.sub(r"\s*\([^)]*\)\s*$", "", core).strip()
+        return simplified or core or name
+
+    spotify._retrieval_artist_alias = retrieval_artist_alias
+    spotify._retrieval_query_title = retrieval_title
 
     def search_track(
         access_token: str,
@@ -44,25 +162,46 @@ def apply(spotify: ModuleType) -> None:
                 and first_search_empty
                 and source_artist_has_asian_script
             ):
-                title = spotify._spotify_query_value(name)
-                artist_text = " ".join(
-                    spotify._spotify_query_value(artist)
-                    for artist in artists
-                    if artist
+                alias = (
+                    spotify._retrieval_artist_alias(artists[0])
+                    if artists
+                    else None
                 )
-                query = f'track:"{title}"'
-                if artist_text:
-                    query += f" {artist_text}"
+                if alias:
+                    title = spotify._retrieval_query_title(name)
+                    query = (
+                        f'track:"{spotify._spotify_query_value(title)}" '
+                        f'artist:"{spotify._spotify_query_value(alias)}"'
+                    )
+                    signal = "ROMANIZED_SECOND_QUERY_AFTER_ZERO_CANDIDATES"
+                    print(
+                        "Spotify retrieval fallback: "
+                        f"query_index=2 mode=romanized-artist-field "
+                        f"source_artist={artists[0]} retrieval_artist={alias} "
+                        f"q={query}"
+                    )
+                    if diagnostics is not None:
+                        diagnostics["retrieval_artist"] = alias
+                        diagnostics["retrieval_title"] = title
+                else:
+                    title = spotify._spotify_query_value(name)
+                    artist_text = " ".join(
+                        spotify._spotify_query_value(artist)
+                        for artist in artists
+                        if artist
+                    )
+                    query = f'track:"{title}"'
+                    if artist_text:
+                        query += f" {artist_text}"
+                    signal = "RELAXED_SECOND_QUERY_AFTER_ZERO_CANDIDATES"
+                    print(
+                        "Spotify retrieval fallback: "
+                        f"query_index=2 mode=free-artist-text q={query}"
+                    )
                 effective_params["q"] = query
                 effective_params["limit"] = 10
-                print(
-                    "Spotify retrieval fallback: "
-                    f"query_index=2 mode=free-artist-text q={query}"
-                )
                 if diagnostics is not None:
-                    diagnostics.setdefault("signals", []).append(
-                        "RELAXED_SECOND_QUERY_AFTER_ZERO_CANDIDATES"
-                    )
+                    diagnostics.setdefault("signals", []).append(signal)
                     diagnostics["relaxed_second_query"] = query
 
             response = inner_get(url, token, effective_params)
