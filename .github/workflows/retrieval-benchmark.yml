@@ -2,12 +2,6 @@ name: Spotify Retrieval Benchmark
 
 on:
   workflow_dispatch:
-    inputs:
-      start_index:
-        description: "Zero-based source row to start from"
-        required: false
-        default: "0"
-        type: number
 
 jobs:
   benchmark:
@@ -44,21 +38,22 @@ jobs:
               env_file.write(f"SPOTIFY_ACCESS_TOKEN={token}\n")
           PY
 
-      - name: Run read-only retrieval benchmark
+      - name: Run read-only production retrieval benchmark
         env:
           SPOTIFY_ACCESS_TOKEN: ${{ env.SPOTIFY_ACCESS_TOKEN }}
         run: >-
-          python -m src.retrieval_benchmark
+          python -m src.production_retrieval_benchmark
           data/tunemymusic_japanese_147.txt
+          --missing-reference data/tunemymusic_missing_7.txt
           --access-token "$SPOTIFY_ACCESS_TOKEN"
-          --json retrieval_benchmark.json
+          --baseline-accepted 97
           --delay-seconds 0.25
-          --start-index ${{ inputs.start_index }}
+          --json production_retrieval_benchmark.json
 
       - name: Upload benchmark report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: spotify-retrieval-benchmark
-          path: retrieval_benchmark.json
+          path: production_retrieval_benchmark.json
           if-no-files-found: error
