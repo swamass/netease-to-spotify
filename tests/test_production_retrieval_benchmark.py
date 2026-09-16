@@ -65,10 +65,13 @@ def test_partial_run_does_not_claim_baseline_delta(monkeypatch):
         def json(self):
             return {"tracks": {"items": []}}
 
+    class RateLimit(benchmark.spotify.SpotifyRateLimitError):
+        retry_after_seconds = 60
+
     monkeypatch.setattr(benchmark.spotify, "_spotify_get", lambda *_args, **_kwargs: Response())
 
     def fake_search_track(*_args, **_kwargs):
-        raise benchmark.spotify.SpotifyRateLimitError("limited", retry_after_seconds=60)
+        raise RateLimit("limited")
 
     monkeypatch.setattr(benchmark.spotify, "search_track", fake_search_track)
 
@@ -80,4 +83,5 @@ def test_partial_run_does_not_claim_baseline_delta(monkeypatch):
     )
 
     assert report["stopped_early"] is True
+    assert report["retry_after_seconds"] == 60
     assert report["delta_from_baseline"] is None
