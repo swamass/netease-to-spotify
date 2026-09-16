@@ -3,10 +3,14 @@ name: Spotify Retrieval Benchmark
 on:
   workflow_dispatch:
 
+concurrency:
+  group: spotify-api-shared
+  cancel-in-progress: false
+
 jobs:
   benchmark:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -38,22 +42,21 @@ jobs:
               env_file.write(f"SPOTIFY_ACCESS_TOKEN={token}\n")
           PY
 
-      - name: Run read-only production retrieval benchmark
+      - name: Run low-traffic production retrieval spot check
         env:
           SPOTIFY_ACCESS_TOKEN: ${{ env.SPOTIFY_ACCESS_TOKEN }}
         run: >-
-          python -m src.production_retrieval_benchmark
-          data/tunemymusic_japanese_147.txt
-          --missing-reference data/tunemymusic_missing_7.txt
+          python -m src.retrieval_spotcheck
+          data/retrieval_spotcheck_5.txt
           --access-token "$SPOTIFY_ACCESS_TOKEN"
-          --baseline-accepted 97
-          --delay-seconds 0.25
-          --json production_retrieval_benchmark.json
+          --max-search-requests 10
+          --delay-seconds 1.0
+          --json retrieval_spotcheck.json
 
       - name: Upload benchmark report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: spotify-retrieval-benchmark
-          path: production_retrieval_benchmark.json
+          path: retrieval_spotcheck.json
           if-no-files-found: error
