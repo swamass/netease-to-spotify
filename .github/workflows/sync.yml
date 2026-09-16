@@ -6,6 +6,10 @@ on:
   schedule:
     - cron: "0 22 * * *"
 
+concurrency:
+  group: spotify-api-shared
+  cancel-in-progress: false
+
 jobs:
   sync:
     runs-on: ubuntu-latest
