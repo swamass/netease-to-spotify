@@ -1,0 +1,15 @@
+{
+  "benchmark_scope": "TuneMyMusic success set only",
+  "source_run_id": 34922550655,
+  "source_commit": "3a776b05f643dfea92d6eeb465e35ab4e70ecc44",
+  "reference_total": 140,
+  "baseline_accepted": 97,
+  "baseline_failed": 43,
+  "retrieval_failures_without_saved_candidates": 37,
+  "matcher_failures_with_saved_candidates": 6,
+  "policy": {
+    "baseline_accepted_live_search": false,
+    "saved_candidate_failures_live_search": false,
+    "retrieval_failures_live_search": true
+  }
+}
