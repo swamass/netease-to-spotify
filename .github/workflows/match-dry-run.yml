@@ -3,6 +3,10 @@ name: NetEase Spotify Match Dry Run
 on:
   workflow_dispatch:
 
+concurrency:
+  group: spotify-api-shared
+  cancel-in-progress: false
+
 jobs:
   dry-run:
     runs-on: ubuntu-latest
