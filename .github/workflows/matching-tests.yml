@@ -20,6 +20,7 @@ on:
       - "tests/test_production_retrieval_benchmark.py"
       - "tests/test_retrieval_spotcheck.py"
       - "data/retrieval_spotcheck_5.txt"
+      - "data/retrieval_title_alias_spotcheck_5.json"
       - "data/tunemymusic_retrieval_failures_37.txt"
       - "data/tunemymusic_saved_candidate_failures_6.txt"
       - "data/tunemymusic_baseline_97_of_140.json"
