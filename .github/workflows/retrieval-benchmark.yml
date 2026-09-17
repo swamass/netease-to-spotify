@@ -42,7 +42,7 @@ jobs:
               env_file.write(f"SPOTIFY_ACCESS_TOKEN={token}\n")
           PY
 
-      - name: Run low-traffic retrieval-failure spot check
+      - name: Run low-traffic title-alias retrieval spot check
         env:
           SPOTIFY_ACCESS_TOKEN: ${{ env.SPOTIFY_ACCESS_TOKEN }}
         run: >-
@@ -50,6 +50,7 @@ jobs:
           data/retrieval_spotcheck_5.txt
           --allowed-failures data/tunemymusic_retrieval_failures_37.txt
           --baseline-metadata data/tunemymusic_baseline_97_of_140.json
+          --title-aliases data/retrieval_title_alias_spotcheck_5.json
           --access-token "$SPOTIFY_ACCESS_TOKEN"
           --max-search-requests 10
           --delay-seconds 1.0
