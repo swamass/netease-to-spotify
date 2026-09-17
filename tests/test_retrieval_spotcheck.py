@@ -69,6 +69,44 @@ def test_spotcheck_restores_spotify_get(monkeypatch):
     assert report["spotcheck"] is True
 
 
+def test_oracle_title_alias_substitution_preserves_source_labels(monkeypatch):
+    captured = {}
+
+    def fake_benchmark(access_token, songs, **kwargs):
+        captured["songs"] = songs
+        return {
+            "read_only": True,
+            "stopped_early": False,
+            "tracks": [
+                {
+                    "source_title": songs[0]["title"],
+                    "source_artist": songs[0]["artist"],
+                    "accepted": True,
+                }
+            ],
+            "spotify_search_requests": 0,
+            "accepted_all": 1,
+        }
+
+    monkeypatch.setattr(retrieval_spotcheck, "benchmark_production", fake_benchmark)
+    song = {"title": "哀愁の宇宙人", "artist": "高中正義"}
+    aliases = {retrieval_spotcheck._song_key(song): "Sad Space Alien"}
+
+    report = retrieval_spotcheck.run_spotcheck(
+        "token",
+        [song],
+        title_aliases=aliases,
+        max_search_requests=10,
+    )
+
+    assert captured["songs"][0]["title"] == "Sad Space Alien"
+    assert report["tracks"][0]["source_title"] == "哀愁の宇宙人"
+    assert report["tracks"][0]["diagnostic_search_title"] == "Sad Space Alien"
+    assert report["tracks"][0]["title_alias_applied"] is True
+    assert report["title_alias_mode"] == "oracle_diagnostic"
+    assert report["title_aliases_applied"] == 1
+
+
 def test_live_search_scope_rejects_any_track_outside_retrieval_failures():
     allowed = [{"title": "CRESCENT AVENTURE", "artist": "角松敏生"}]
     retrieval_spotcheck.validate_search_scope(
@@ -79,6 +117,14 @@ def test_live_search_scope_rejects_any_track_outside_retrieval_failures():
         retrieval_spotcheck.validate_search_scope(
             [{"title": "Dress Down", "artist": "秋元薫"}], allowed
         )
+
+
+def test_title_alias_scope_rejects_tracks_outside_sample():
+    sample = [{"title": "Tasogare", "artist": "山根麻以"}]
+    outside = {("other song", "other artist"): "Other Song"}
+
+    with pytest.raises(ValueError, match="outside the spot-check sample"):
+        retrieval_spotcheck.validate_title_alias_scope(sample, outside)
 
 
 def test_baseline_comparison_is_analysis_only():
@@ -111,6 +157,9 @@ def test_repository_failure_partition_and_spotcheck_scope_are_consistent():
         str(root / "data" / "tunemymusic_saved_candidate_failures_6.txt")
     )
     spotcheck = parse_lines(str(root / "data" / "retrieval_spotcheck_5.txt"))
+    title_aliases = retrieval_spotcheck.load_title_aliases(
+        str(root / "data" / "retrieval_title_alias_spotcheck_5.json")
+    )
 
     retrieval_keys = {retrieval_spotcheck._song_key(song) for song in retrieval_failures}
     saved_keys = {
@@ -123,3 +172,4 @@ def test_repository_failure_partition_and_spotcheck_scope_are_consistent():
     assert len(retrieval_keys | saved_keys) == 43
     assert retrieval_keys.isdisjoint(saved_keys)
     assert spotcheck_keys <= retrieval_keys
+    assert set(title_aliases) == spotcheck_keys
