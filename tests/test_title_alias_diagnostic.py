@@ -70,12 +70,12 @@ def test_discovers_unique_worldwide_digital_release_title(monkeypatch):
     )
 
     assert alias == "Sad Space Alien"
-    assert trace["artist_mbid"] == "takanaka"
+    assert trace["artist_mbids"] == ["takanaka"]
     assert trace["recording_ids"] == ["sad-space-alien"]
     assert trace["reason"] == "UNIQUE_RELEASE_TITLE"
 
 
-def test_rejects_ambiguous_equal_strength_release_titles(monkeypatch):
+def test_prefers_romanized_title_over_parenthetical_translation(monkeypatch):
     def fake_mb(path, params):
         if path == "artist":
             return {
@@ -122,11 +122,170 @@ def test_rejects_ambiguous_equal_strength_release_titles(monkeypatch):
 
     monkeypatch.setattr(title_alias_diagnostic.spotify, "_musicbrainz_get", fake_mb)
     alias, trace = title_alias_diagnostic.discover_title_alias(
-        "たそがれ", "山根麻以"
+        "たそがれ (Twilight)", "山根麻以"
     )
 
-    assert alias is None
-    assert trace["reason"] == "ALTERNATE_TITLE_AMBIGUOUS"
+    assert alias == "Tasogare"
+    assert trace["reason"] == "UNIQUE_RELEASE_TITLE"
+    assert trace["parenthetical_translation"] is False
+
+
+
+def test_uses_particle_o_as_recording_query_variant(monkeypatch):
+    seen_queries = []
+
+    def fake_mb(path, params):
+        if path == "artist":
+            return {"artists": [{"id": "onuki", "name": "大貫妙子", "aliases": []}]}
+        if path == "recording":
+            seen_queries.append(params["query"])
+            if 'recording:"Kusuri o Takusan"' in params["query"]:
+                return {
+                    "recordings": [
+                        {
+                            "id": "kusuri",
+                            "score": "100",
+                            "artist-credit": [{"artist": {"id": "onuki"}}],
+                        }
+                    ]
+                }
+            return {"recordings": []}
+        if path == "release":
+            return {
+                "releases": [
+                    {
+                        "country": "XW",
+                        "status": "Official",
+                        "media": [
+                            {
+                                "format": "Digital Media",
+                                "tracks": [
+                                    {
+                                        "title": "Kusuri o Takusan",
+                                        "recording": {"id": "kusuri"},
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(title_alias_diagnostic.spotify, "_musicbrainz_get", fake_mb)
+    alias, trace = title_alias_diagnostic.discover_title_alias(
+        "Kusuri Wo Takusan", "大貫妙子"
+    )
+
+    assert alias == "Kusuri o Takusan"
+    assert any('recording:"Kusuri o Takusan"' in query for query in seen_queries)
+    assert trace["recording_ids"] == ["kusuri"]
+
+
+def test_uses_botchi_spelling_as_recording_query_variant(monkeypatch):
+    seen_queries = []
+
+    def fake_mb(path, params):
+        if path == "artist":
+            return {"artists": [{"id": "sato", "name": "佐藤奈々子", "aliases": []}]}
+        if path == "recording":
+            seen_queries.append(params["query"])
+            if 'recording:"Subterranean Futari Botchi"' in params["query"]:
+                return {
+                    "recordings": [
+                        {
+                            "id": "botchi",
+                            "score": "100",
+                            "artist-credit": [{"artist": {"id": "sato"}}],
+                        }
+                    ]
+                }
+            return {"recordings": []}
+        if path == "release":
+            return {
+                "releases": [
+                    {
+                        "country": "XW",
+                        "status": "Official",
+                        "media": [
+                            {
+                                "format": "Digital Media",
+                                "tracks": [
+                                    {
+                                        "title": "Subterranean Futari Botchi",
+                                        "recording": {"id": "botchi"},
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(title_alias_diagnostic.spotify, "_musicbrainz_get", fake_mb)
+    alias, trace = title_alias_diagnostic.discover_title_alias(
+        "Subterranean Futari Bocci", "佐藤奈々子"
+    )
+
+    assert alias == "Subterranean Futari Botchi"
+    assert any(
+        'recording:"Subterranean Futari Botchi"' in query for query in seen_queries
+    )
+    assert trace["recording_ids"] == ["botchi"]
+
+
+def test_multiple_exact_artist_ids_can_resolve_to_one_recording(monkeypatch):
+    def fake_mb(path, params):
+        if path == "artist":
+            return {
+                "artists": [
+                    {"id": "a", "name": "林哲司", "aliases": []},
+                    {"id": "b", "name": "林哲司", "aliases": []},
+                ]
+            }
+        if path == "recording":
+            if "arid:a" in params["query"]:
+                return {"recordings": []}
+            return {
+                "recordings": [
+                    {
+                        "id": "hidari",
+                        "score": "100",
+                        "artist-credit": [{"artist": {"id": "b"}}],
+                    }
+                ]
+            }
+        if path == "release":
+            return {
+                "releases": [
+                    {
+                        "country": "XW",
+                        "status": "Official",
+                        "media": [
+                            {
+                                "format": "Digital Media",
+                                "tracks": [
+                                    {
+                                        "title": "HIDARIMUNE NO SEIZA",
+                                        "recording": {"id": "hidari"},
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(title_alias_diagnostic.spotify, "_musicbrainz_get", fake_mb)
+    alias, trace = title_alias_diagnostic.discover_title_alias(
+        "Hidari Mune No Seiza", "林哲司"
+    )
+
+    assert alias == "HIDARIMUNE NO SEIZA"
+    assert trace["artist_mbids"] == ["a", "b"]
+    assert trace["recording_ids"] == ["hidari"]
 
 
 def test_rejects_non_unique_artist_identity(monkeypatch):
@@ -146,7 +305,7 @@ def test_rejects_non_unique_artist_identity(monkeypatch):
     )
 
     assert alias is None
-    assert trace["reason"] == "ARTIST_IDENTITY_NOT_UNIQUE"
+    assert trace["reason"] == "RECORDING_NOT_FOUND"
 
 
 def test_rejects_version_conflicting_alternate_title(monkeypatch):
