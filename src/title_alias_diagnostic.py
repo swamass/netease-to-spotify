@@ -48,13 +48,43 @@ def _exact_artist_mbids(source_artist: str) -> set[str]:
     return exact
 
 
-def _title_variants(source_title: str) -> list[str]:
+def _base_title_variants(source_title: str) -> list[str]:
     original = unicodedata.normalize("NFKC", source_title).strip()
     simplified = re.sub(r"\s*[\(（][^\)）]*[\)）]\s*$", "", original).strip()
     variants = [original]
     if simplified and simplified != original:
         variants.append(simplified)
     return list(dict.fromkeys(value for value in variants if value))
+
+
+def _romanized_spelling_variants(value: str) -> list[str]:
+    variants = [value]
+    particle_o = re.sub(r"\bwo\b", "o", value, flags=re.IGNORECASE)
+    if particle_o != value:
+        variants.append(particle_o)
+    botchi = re.sub(r"cci\b", "tchi", value, flags=re.IGNORECASE)
+    if botchi != value:
+        variants.append(botchi)
+    return list(dict.fromkeys(variants))
+
+
+def _recording_query_variants(source_title: str, source_artist: str) -> list[str]:
+    variants: list[str] = []
+    asian_artist = spotify._contains_cjk(source_artist) or spotify._contains_kana(source_artist)
+    for title in _base_title_variants(source_title):
+        variants.append(title)
+        if asian_artist and not (spotify._contains_cjk(title) or spotify._contains_kana(title)):
+            variants.extend(_romanized_spelling_variants(title))
+    return list(dict.fromkeys(value for value in variants if value))
+
+
+def _parenthetical_title_keys(source_title: str) -> set[str]:
+    normalized = unicodedata.normalize("NFKC", source_title)
+    return {
+        spotify._normalize_text(value)
+        for value in re.findall(r"[\(（]([^\)）]+)[\)）]", normalized)
+        if value.strip()
+    }
 
 
 def _recording_artist_ids(recording: dict) -> set[str]:
@@ -69,40 +99,33 @@ def _recording_artist_ids(recording: dict) -> set[str]:
     return ids
 
 
-def _find_recording_ids(source_title: str, artist_mbid: str) -> set[str]:
+def _find_recording_ids(source_title: str, source_artist: str, artist_mbids: set[str]) -> set[str]:
     best_score = -1
     best_rows: list[dict] = []
-    for title in _title_variants(source_title):
-        data = spotify._musicbrainz_get(
-            "recording",
-            {
-                "query": (
-                    f'recording:"{_escape_query(title)}" AND arid:{artist_mbid}'
-                ),
-                "fmt": "json",
-                "limit": "5",
-            },
-        )
-        for row in (data or {}).get("recordings", []):
-            try:
-                score = int(row.get("score", 0))
-            except (TypeError, ValueError):
-                score = 0
-            if score < 95 or artist_mbid not in _recording_artist_ids(row):
-                continue
-            if score > best_score:
-                best_score = score
-                best_rows = [row]
-            elif score == best_score:
-                best_rows.append(row)
-        if best_score == 100:
-            break
+    for artist_mbid in sorted(artist_mbids):
+        for title in _recording_query_variants(source_title, source_artist):
+            data = spotify._musicbrainz_get(
+                "recording",
+                {
+                    "query": f'recording:"{_escape_query(title)}" AND arid:{artist_mbid}',
+                    "fmt": "json",
+                    "limit": "5",
+                },
+            )
+            for row in (data or {}).get("recordings", []):
+                try:
+                    score = int(row.get("score", 0))
+                except (TypeError, ValueError):
+                    score = 0
+                if score < 95 or artist_mbid not in _recording_artist_ids(row):
+                    continue
+                if score > best_score:
+                    best_score = score
+                    best_rows = [row]
+                elif score == best_score:
+                    best_rows.append(row)
 
-    return {
-        row.get("id")
-        for row in best_rows
-        if row.get("id")
-    }
+    return {row.get("id") for row in best_rows if row.get("id")}
 
 
 def _track_title_evidence(recording_id: str) -> list[tuple[str, tuple[int, int, int, int]]]:
@@ -143,34 +166,42 @@ def discover_title_alias(source_title: str, source_artist: str) -> tuple[str | N
     trace: dict = {
         "source_title": source_title,
         "source_artist": source_artist,
-        "artist_mbid": None,
+        "artist_mbids": [],
         "recording_ids": [],
         "selected_title": None,
         "reason": None,
     }
 
     artist_ids = _exact_artist_mbids(source_artist)
-    if len(artist_ids) != 1:
-        trace["reason"] = "ARTIST_IDENTITY_NOT_UNIQUE"
+    trace["artist_mbids"] = sorted(artist_ids)
+    if not artist_ids:
+        trace["reason"] = "ARTIST_IDENTITY_NOT_FOUND"
         return None, trace
-    artist_mbid = next(iter(artist_ids))
-    trace["artist_mbid"] = artist_mbid
 
-    recording_ids = _find_recording_ids(source_title, artist_mbid)
+    recording_ids = _find_recording_ids(source_title, source_artist, artist_ids)
     trace["recording_ids"] = sorted(recording_ids)
     if not recording_ids:
         trace["reason"] = "RECORDING_NOT_FOUND"
         return None, trace
+    if len(recording_ids) != 1:
+        trace["reason"] = "RECORDING_IDENTITY_NOT_UNIQUE"
+        return None, trace
 
     source_key = spotify._normalize_text(source_title)
     simplified_keys = {
-        spotify._normalize_text(value) for value in _title_variants(source_title)
+        spotify._normalize_text(value) for value in _base_title_variants(source_title)
     }
+    parenthetical_keys = _parenthetical_title_keys(source_title)
     candidates: dict[str, dict] = defaultdict(
-        lambda: {"title": "", "best_rank": (0, 0, 0, 0), "count": 0}
+        lambda: {
+            "title": "",
+            "best_rank": (0, 0, 0, 0),
+            "count": 0,
+            "parenthetical_translation": False,
+        }
     )
-    for recording_id in sorted(recording_ids):
-        for title, rank in _track_title_evidence(recording_id):
+    recording_id = next(iter(recording_ids))
+    for title, rank in _track_title_evidence(recording_id):
             key = spotify._normalize_text(title)
             if not key or key == source_key or key in simplified_keys:
                 continue
@@ -180,6 +211,7 @@ def discover_title_alias(source_title: str, source_artist: str) -> tuple[str | N
             item["title"] = title
             item["best_rank"] = max(item["best_rank"], rank)
             item["count"] += 1
+            item["parenthetical_translation"] = key in parenthetical_keys
 
     if not candidates:
         trace["reason"] = "NO_ALTERNATE_RELEASE_TITLE"
@@ -187,11 +219,27 @@ def discover_title_alias(source_title: str, source_artist: str) -> tuple[str | N
 
     ranked = sorted(
         candidates.values(),
-        key=lambda item: (item["best_rank"], item["count"]),
+        key=lambda item: (
+            int(not item["parenthetical_translation"]),
+            item["best_rank"],
+            item["count"],
+        ),
         reverse=True,
     )
-    best_key = (ranked[0]["best_rank"], ranked[0]["count"])
-    tied = [item for item in ranked if (item["best_rank"], item["count"]) == best_key]
+    best_key = (
+        int(not ranked[0]["parenthetical_translation"]),
+        ranked[0]["best_rank"],
+        ranked[0]["count"],
+    )
+    tied = [
+        item
+        for item in ranked
+        if (
+            int(not item["parenthetical_translation"]),
+            item["best_rank"],
+            item["count"],
+        ) == best_key
+    ]
     if len(tied) != 1:
         trace["reason"] = "ALTERNATE_TITLE_AMBIGUOUS"
         return None, trace
@@ -201,6 +249,7 @@ def discover_title_alias(source_title: str, source_artist: str) -> tuple[str | N
     trace["reason"] = "UNIQUE_RELEASE_TITLE"
     trace["evidence_rank"] = list(tied[0]["best_rank"])
     trace["evidence_count"] = tied[0]["count"]
+    trace["parenthetical_translation"] = bool(tied[0]["parenthetical_translation"])
     return selected, trace
 
 
