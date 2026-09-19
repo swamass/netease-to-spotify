@@ -86,6 +86,13 @@ def _parenthetical_title_keys(source_title: str) -> set[str]:
         if value.strip()
     }
 
+def _query_shape(value: str) -> str:
+    """Preserve word boundaries while ignoring case and punctuation styling."""
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    normalized = re.sub(r"[^\w]+", " ", normalized, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
 
 def _recording_artist_ids(recording: dict) -> set[str]:
     ids: set[str] = set()
@@ -188,9 +195,11 @@ def discover_title_alias(source_title: str, source_artist: str) -> tuple[str | N
         return None, trace
 
     source_key = spotify._normalize_text(source_title)
+    base_variants = _base_title_variants(source_title)
     simplified_keys = {
-        spotify._normalize_text(value) for value in _base_title_variants(source_title)
+        spotify._normalize_text(value) for value in base_variants
     }
+    source_query_shapes = {_query_shape(value) for value in base_variants}
     parenthetical_keys = _parenthetical_title_keys(source_title)
     candidates: dict[str, dict] = defaultdict(
         lambda: {
@@ -203,8 +212,14 @@ def discover_title_alias(source_title: str, source_artist: str) -> tuple[str | N
     recording_id = next(iter(recording_ids))
     for title, rank in _track_title_evidence(recording_id):
             key = spotify._normalize_text(title)
-            if not key or key == source_key or key in simplified_keys:
+            if not key:
                 continue
+            if key == source_key or key in simplified_keys:
+                # Same matcher identity can still be a useful Spotify retrieval
+                # alias when token boundaries differ, e.g.
+                # "Hidari Mune" vs "HIDARIMUNE". Pure case/style changes are ignored.
+                if _query_shape(title) in source_query_shapes:
+                    continue
             if spotify._version_conflicts(source_title, "", title, ""):
                 continue
             item = candidates[key]
