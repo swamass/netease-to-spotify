@@ -9,6 +9,7 @@ import unicodedata
 from pathlib import Path
 
 from . import spotify
+from . import retrieval_policy
 from .retrieval_benchmark import parse_lines
 from .retrieval_spotcheck import (
     attach_baseline_analysis,
@@ -87,15 +88,12 @@ def _run_second_query_diagnostic(
     overrides: dict[str, str],
 ) -> dict:
     """Run the normal matcher while changing only retrieval query #2 titles."""
-    original_query_title = spotify._retrieval_query_title
+    original_hook = retrieval_policy._diagnostic_title_variant_hook
 
-    def diagnostic_query_title(name: str) -> str:
-        return overrides.get(
-            spotify._normalize_text(name),
-            original_query_title(name),
-        )
+    def diagnostic_title_variant(name: str) -> str | None:
+        return overrides.get(spotify._normalize_text(name))
 
-    spotify._retrieval_query_title = diagnostic_query_title
+    retrieval_policy.set_diagnostic_title_variant_hook(diagnostic_title_variant)
     try:
         return run_spotcheck(
             access_token,
@@ -105,7 +103,7 @@ def _run_second_query_diagnostic(
             title_aliases=None,
         )
     finally:
-        spotify._retrieval_query_title = original_query_title
+        retrieval_policy.set_diagnostic_title_variant_hook(original_hook)
 
 
 def main() -> None:

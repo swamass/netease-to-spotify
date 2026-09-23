@@ -1,4 +1,4 @@
-from src import spotify
+from src import auto_title_alias_spotcheck, retrieval_policy, spotify
 
 
 class FakeResponse:
@@ -205,3 +205,142 @@ def test_zero_candidate_retrieval_fallback_never_exceeds_two_searches(monkeypatc
         "token", "Unknown Song", ["未知艺人"], "Unknown Album"
     ) is None
     assert len(calls) == 2
+
+
+def test_diagnostic_title_variant_keeps_original_artist_in_query_two(monkeypatch):
+    calls = []
+    responses = [FakeResponse([]), FakeResponse([])]
+    monkeypatch.setattr(
+        spotify,
+        "_spotify_get",
+        lambda _url, _token, params: calls.append(params) or responses.pop(0),
+    )
+    monkeypatch.setattr(
+        retrieval_policy,
+        "_diagnostic_title_variant_hook",
+        lambda title: "Kusuri o Takusan" if title == "Kusuri Wo Takusan" else None,
+    )
+    spotify.search_track("token", "Kusuri Wo Takusan", ["大貫妙子"], "Album")
+    assert len(calls) == 2
+    assert calls[1]["q"] == 'track:"Kusuri o Takusan" artist:"大貫妙子"'
+
+
+def test_diagnostic_title_variant_does_not_require_cjk_artist(monkeypatch):
+    calls = []
+    responses = [FakeResponse([]), FakeResponse([])]
+    monkeypatch.setattr(
+        retrieval_policy,
+        "_diagnostic_title_variant_hook",
+        lambda title: "Alternate Title" if title == "Original Title" else None,
+    )
+    monkeypatch.setattr(
+        spotify,
+        "_spotify_get",
+        lambda _url, _token, params: calls.append(params) or responses.pop(0),
+    )
+
+    spotify.search_track("token", "Original Title", ["English Artist"], "Album")
+
+    assert len(calls) == 2
+    assert calls[1]["q"] == 'track:"Alternate Title" artist:"English Artist"'
+
+
+def test_default_title_variant_hook_preserves_current_query(monkeypatch):
+    calls = []
+    monkeypatch.setattr(retrieval_policy, "_diagnostic_title_variant_hook", None)
+    monkeypatch.setattr(
+        spotify,
+        "_spotify_get",
+        lambda _url, _token, params: calls.append(params) or FakeResponse([]),
+    )
+    spotify.search_track("token", "Kusuri Wo Takusan", ["大貫妙子"], "Album")
+    assert calls[1]["q"] == 'track:"Kusuri Wo Takusan" 大貫妙子'
+    assert len(calls) == 2
+
+
+def test_diagnostic_title_variant_does_not_run_after_nonempty_first_search(monkeypatch):
+    calls = []
+    hook_calls = []
+    monkeypatch.setattr(
+        retrieval_policy,
+        "_diagnostic_title_variant_hook",
+        lambda title: hook_calls.append(title) or "Variant",
+    )
+    monkeypatch.setattr(
+        spotify,
+        "_spotify_get",
+        lambda _url, _token, params: calls.append(params) or FakeResponse([candidate("id", "Song", "Artist")]),
+    )
+    spotify.search_track("token", "Song", ["Artist"], "Album")
+    assert hook_calls == []
+    assert len(calls) == 1
+
+
+def test_diagnostic_title_variant_does_not_run_after_first_search_failure(monkeypatch):
+    calls = []
+    hook_calls = []
+    monkeypatch.setattr(
+        retrieval_policy,
+        "_diagnostic_title_variant_hook",
+        lambda title: hook_calls.append(title) or "Variant",
+    )
+    monkeypatch.setattr(
+        spotify,
+        "_spotify_get",
+        lambda _url, _token, params: calls.append(params) or None,
+    )
+    spotify.search_track("token", "Song", ["Artist"], "Album")
+    assert hook_calls == []
+    assert len(calls) == 2
+
+
+def test_second_query_diagnostic_returns_none_without_override(monkeypatch):
+    sentinel = {"diagnostic": "report"}
+    observed = []
+
+    def fake_run_spotcheck(*args, **kwargs):
+        observed.append(
+            retrieval_policy._diagnostic_title_variant_hook("Title")
+        )
+        observed.append(
+            retrieval_policy._diagnostic_title_variant_hook("Unknown Title")
+        )
+        return sentinel
+
+    monkeypatch.setattr(auto_title_alias_spotcheck, "run_spotcheck", fake_run_spotcheck)
+    assert auto_title_alias_spotcheck._run_second_query_diagnostic(
+        "token",
+        [{"title": "Unknown Title", "artist": "艺人"}],
+        max_search_requests=2,
+        delay_seconds=0,
+        overrides={"title": "Variant"},
+    ) is sentinel
+    assert observed == ["Variant", None]
+    assert retrieval_policy._diagnostic_title_variant_hook is None
+
+
+def test_second_query_diagnostic_restores_hook_after_exception(monkeypatch):
+    original_hook = lambda _title: "original"
+
+    def fail_run_spotcheck(*args, **kwargs):
+        raise RuntimeError("diagnostic failure")
+
+    monkeypatch.setattr(
+        retrieval_policy, "_diagnostic_title_variant_hook", original_hook
+    )
+    monkeypatch.setattr(auto_title_alias_spotcheck, "run_spotcheck", fail_run_spotcheck)
+
+    try:
+        auto_title_alias_spotcheck._run_second_query_diagnostic(
+            "token",
+            [{"title": "Title", "artist": "艺人"}],
+            max_search_requests=2,
+            delay_seconds=0,
+            overrides={"title": "Variant"},
+        )
+    except RuntimeError as error:
+        assert str(error) == "diagnostic failure"
+    else:
+        raise AssertionError("expected diagnostic failure")
+
+    assert retrieval_policy._diagnostic_title_variant_hook is original_hook

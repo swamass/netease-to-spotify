@@ -14,6 +14,19 @@ import re
 import unicodedata
 from types import ModuleType
 
+_diagnostic_title_variant_hook = None
+
+
+def set_diagnostic_title_variant_hook(hook) -> None:
+    global _diagnostic_title_variant_hook
+    _diagnostic_title_variant_hook = hook
+
+
+def diagnostic_title_variant(title: str) -> str | None:
+    if _diagnostic_title_variant_hook is None:
+        return None
+    return _diagnostic_title_variant_hook(title)
+
 
 def apply(spotify: ModuleType) -> None:
     original_search_track = spotify.search_track
@@ -180,17 +193,33 @@ def apply(spotify: ModuleType) -> None:
 
             spotify_search_count += 1
             effective_params = dict(params)
-            if (
-                spotify_search_count == 2
-                and first_search_empty
-                and source_artist_has_asian_script
-            ):
-                alias = (
-                    spotify._retrieval_artist_alias(artists[0])
-                    if artists
-                    else None
-                )
-                if alias:
+            if spotify_search_count == 2 and first_search_empty:
+                title_override = diagnostic_title_variant(name)
+                alias = None
+                if title_override:
+                    query = (
+                        f'track:"{spotify._spotify_query_value(title_override)}" '
+                        f'artist:"{spotify._spotify_query_value(artists[0])}"'
+                    )
+                    signal = "DIAGNOSTIC_TITLE_VARIANT_SECOND_QUERY"
+                    print(
+                        "Spotify retrieval fallback: "
+                        f"query_index=2 mode=diagnostic-title-variant "
+                        f"source_artist={artists[0]} q={query}"
+                    )
+                    if diagnostics is not None:
+                        diagnostics["retrieval_title"] = title_override
+                elif source_artist_has_asian_script:
+                    alias = (
+                        spotify._retrieval_artist_alias(artists[0])
+                        if artists
+                        else None
+                    )
+                if (
+                    not title_override
+                    and source_artist_has_asian_script
+                    and alias
+                ):
                     title = spotify._retrieval_query_title(name)
                     query = (
                         f'track:"{spotify._spotify_query_value(title)}" '
@@ -206,7 +235,7 @@ def apply(spotify: ModuleType) -> None:
                     if diagnostics is not None:
                         diagnostics["retrieval_artist"] = alias
                         diagnostics["retrieval_title"] = title
-                else:
+                elif not title_override and source_artist_has_asian_script:
                     title = spotify._spotify_query_value(name)
                     artist_text = " ".join(
                         spotify._spotify_query_value(artist)
@@ -221,13 +250,14 @@ def apply(spotify: ModuleType) -> None:
                         "Spotify retrieval fallback: "
                         f"query_index=2 mode=free-artist-text q={query}"
                     )
-                effective_params["q"] = query
-                effective_params["limit"] = 10
-                if diagnostics is not None:
-                    signals = diagnostics.setdefault("signals", [])
-                    if signal not in signals:
-                        signals.append(signal)
-                    diagnostics["relaxed_second_query"] = query
+                if title_override or source_artist_has_asian_script:
+                    effective_params["q"] = query
+                    effective_params["limit"] = 10
+                    if diagnostics is not None:
+                        signals = diagnostics.setdefault("signals", [])
+                        if signal not in signals:
+                            signals.append(signal)
+                        diagnostics["relaxed_second_query"] = query
 
             response = inner_get(url, token, effective_params)
             if spotify_search_count == 1:
