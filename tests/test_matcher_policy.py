@@ -1,3 +1,5 @@
+import pytest
+
 from src import spotify
 
 
@@ -32,6 +34,109 @@ def test_cross_script_title_still_requires_recording_evidence(monkeypatch):
     monkeypatch.setattr(spotify, "_musicbrainz_recordings_for_isrc", lambda _isrc: [])
     assert spotify._musicbrainz_recording_identity_accepts(
         "都会", ["大貫妙子"], "", item, allow_cross_script_title=True
+    ) is False
+
+
+def _kusuri_recording(**overrides):
+    recording = {
+        "id": "kusuri-recording",
+        "title": "くすりをたくさん",
+        "length": 249293,
+        "artist-credit": [{"artist": {"id": "taeko-mbid"}}],
+        "disambiguation": "",
+    }
+    recording.update(overrides)
+    return recording
+
+
+def _kusuri_candidate(**overrides):
+    item = candidate(
+        "kusuri",
+        "Kusuri o Takusan",
+        "Taeko Onuki",
+        album="SUNSHOWER",
+        isrc="JPCR07700340",
+    )
+    item["duration_ms"] = 249293
+    item.update(overrides)
+    return item
+
+
+def _setup_kusuri(monkeypatch, recordings):
+    monkeypatch.setattr(
+        spotify, "_musicbrainz_artist_identity", lambda *_args, **_kwargs: {"taeko-mbid"}
+    )
+    monkeypatch.setattr(
+        spotify, "_musicbrainz_recordings_for_isrc", lambda _isrc: recordings
+    )
+
+
+def test_cross_script_recording_title_rescue_uses_spotify_mb_duration(monkeypatch):
+    item = _kusuri_candidate()
+    _setup_kusuri(monkeypatch, [_kusuri_recording()])
+    diagnostics = {}
+
+    assert spotify._musicbrainz_recording_identity_accepts(
+        "Kusuri Wo Takusan", ["大貫妙子"], "Sunshower", item, diagnostics=diagnostics
+    ) is True
+
+    verification = diagnostics["musicbrainz_verifications"][0]
+    assert verification["predicates"]["recording_title"] == "UNKNOWN_CROSS_SCRIPT"
+    assert verification["recording_predicates"][0]["title_identity"] == "UNKNOWN_CROSS_SCRIPT"
+    assert verification["predicates"]["duration"] == "PASS"
+    assert verification["recording_predicates"][0]["duration_diff_ms"] == 0
+    assert verification["result"] == "CONFIRMED"
+
+
+def test_search_track_accepts_kusuri_with_cross_script_recording_title(monkeypatch):
+    item = _kusuri_candidate()
+    _setup_kusuri(monkeypatch, [_kusuri_recording()])
+    monkeypatch.setattr(spotify, "_spotify_get", lambda *_args, **_kwargs: FakeResponse([item]))
+
+    assert spotify.search_track(
+        "token", "Kusuri Wo Takusan", ["大貫妙子"], "Sunshower"
+    ) == "kusuri"
+
+
+@pytest.mark.parametrize(
+    "recording_kwargs",
+    [
+        {"artist-credit": [{"artist": {"id": "other-mbid"}}]},
+        {"length": None},
+        {"length": 200000},
+        {"disambiguation": "Remix"},
+    ],
+)
+def test_cross_script_recording_title_rescue_keeps_safety_guards(monkeypatch, recording_kwargs):
+    item = _kusuri_candidate()
+    _setup_kusuri(monkeypatch, [_kusuri_recording(**recording_kwargs)])
+    assert spotify._musicbrainz_recording_identity_accepts(
+        "Kusuri Wo Takusan", ["大貫妙子"], "Sunshower", item
+    ) is False
+
+
+def test_cross_script_recording_title_rescue_requires_unique_isrc_recording(monkeypatch):
+    item = _kusuri_candidate()
+    _setup_kusuri(monkeypatch, [_kusuri_recording(), _kusuri_recording(id="other")])
+    assert spotify._musicbrainz_recording_identity_accepts(
+        "Kusuri Wo Takusan", ["大貫妙子"], "Sunshower", item
+    ) is False
+
+
+def test_latin_title_mismatch_does_not_use_recording_cross_script_rescue(monkeypatch):
+    item = _kusuri_candidate(name="Unrelated Latin Title")
+    _setup_kusuri(monkeypatch, [_kusuri_recording(title="くすりをたくさん")])
+    assert spotify._musicbrainz_recording_identity_accepts(
+        "Subterranean Futari Bocci", ["佐藤奈々子"], "Album", item
+    ) is False
+
+
+def test_cross_script_recording_title_rescue_requires_spotify_duration(monkeypatch):
+    item = _kusuri_candidate()
+    item.pop("duration_ms")
+    _setup_kusuri(monkeypatch, [_kusuri_recording()])
+    assert spotify._musicbrainz_recording_identity_accepts(
+        "Kusuri Wo Takusan", ["大貫妙子"], "Sunshower", item
     ) is False
 
 

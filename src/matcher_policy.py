@@ -16,6 +16,7 @@ from types import ModuleType
 
 def apply(spotify: ModuleType) -> None:
     """Apply the shared matcher policy to the loaded ``spotify`` module."""
+    recording_duration_tolerance_ms = 30000
 
     def artist_result_names(artist: dict) -> set[str]:
         values = {
@@ -99,6 +100,11 @@ def apply(spotify: ModuleType) -> None:
                 if mbid and spotify._normalize_text(credit_name(credit)) == normalized:
                     ids.add(mbid)
         return ids
+
+    def title_scripts_differ(source: str, recording: str) -> bool:
+        source_non_latin = spotify._contains_cjk(source) or spotify._contains_kana(source)
+        recording_non_latin = spotify._contains_cjk(recording) or spotify._contains_kana(recording)
+        return source_non_latin != recording_non_latin
 
     def recording_credit_artist_ids(candidate: dict, recordings: list[dict]) -> set[str]:
         """Return ISRC recording MBIDs credited exactly as Spotify displays them."""
@@ -309,6 +315,7 @@ def apply(spotify: ModuleType) -> None:
         candidate_duration = spotify._coerce_duration_ms(candidate.get("duration_ms"))
         best_difference = None
         matched_recording = False
+        cross_script_recording_title = False
         recording_predicates = []
 
         for recording in recordings:
@@ -334,12 +341,27 @@ def apply(spotify: ModuleType) -> None:
                 if recording_duration and candidate_duration
                 else None
             )
+            title_rescue = (
+                len(recordings) == 1
+                and not recording_title_match
+                and not allow_cross_script_title
+                and title_scripts_differ(source_name, recording.get("title", ""))
+                and identity_route == "artist"
+                and recording_artist_match
+                and difference is not None
+                and difference <= recording_duration_tolerance_ms
+                and not recording_version_conflict
+            )
             recording_predicates.append({
                 "mbid": recording.get("id"),
                 "artist_identity": "PASS" if recording_artist_match else "FAIL",
-                "title_identity": "PASS" if recording_title_match else "FAIL",
+                "title_identity": (
+                    "PASS" if recording_title_match
+                    else "UNKNOWN_CROSS_SCRIPT" if title_rescue
+                    else "FAIL"
+                ),
                 "duration": (
-                    "PASS" if difference is not None and difference <= 30000
+                    "PASS" if difference is not None and difference <= recording_duration_tolerance_ms
                     else "UNKNOWN" if difference is None else "FAIL"
                 ),
                 "duration_diff_ms": difference,
@@ -347,12 +369,13 @@ def apply(spotify: ModuleType) -> None:
             })
             if not recording_artist_match:
                 continue
-            if not recording_title_match:
+            if not recording_title_match and not title_rescue:
                 continue
             if recording_version_conflict:
                 continue
 
             matched_recording = True
+            cross_script_recording_title = cross_script_recording_title or title_rescue
             if best_difference is None or (
                 difference is not None and difference < best_difference
             ):
@@ -361,12 +384,15 @@ def apply(spotify: ModuleType) -> None:
         verification["recording_predicates"] = recording_predicates
         verification["predicates"].update({
             "artist_identity": "PASS",
-            "recording_title": "PASS" if matched_recording else "FAIL",
+            "recording_title": (
+                "UNKNOWN_CROSS_SCRIPT" if cross_script_recording_title
+                else "PASS" if matched_recording else "FAIL"
+            ),
             "recording_artist": "PASS" if any(
                 row["artist_identity"] == "PASS" for row in recording_predicates
             ) else "FAIL",
             "duration": (
-                "PASS" if best_difference is not None and best_difference <= 30000
+                "PASS" if best_difference is not None and best_difference <= recording_duration_tolerance_ms
                 else "UNKNOWN" if best_difference is None else "FAIL"
             ),
             "isrc_uniqueness": (
@@ -379,11 +405,11 @@ def apply(spotify: ModuleType) -> None:
             confirmed = (
                 matched_recording
                 and best_difference is not None
-                and best_difference <= 30000
+                and best_difference <= recording_duration_tolerance_ms
             )
         else:
             confirmed = matched_recording and (
-                best_difference is None or best_difference <= 30000
+                best_difference is None or best_difference <= recording_duration_tolerance_ms
             )
 
         print(

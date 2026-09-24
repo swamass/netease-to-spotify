@@ -958,6 +958,44 @@ def test_exact_artist_cross_script_title_without_recording_stays_rejected(monkey
     assert run_search(monkeypatch, "忘れる前に", ["Vaundy"], "Album", [candidate]) is None
 
 
+def test_subterranean_bocci_botchi_stays_rejected_before_recording_rescue(monkeypatch):
+    candidate = track(
+        "subterranean",
+        "Subterranean Futari Botchi",
+        ["Nanaco Sato"],
+        "The Milky Way",
+    )
+    candidate.update({"external_ids": {"isrc": "JPCO07757050"}, "duration_ms": 200000})
+    recording_calls = []
+    monkeypatch.setattr(
+        spotify,
+        "_musicbrainz_artist_identity_supported",
+        lambda *_args: False,
+    )
+    monkeypatch.setattr(
+        spotify,
+        "_musicbrainz_recordings_for_isrc",
+        lambda isrc: recording_calls.append(isrc) or [{
+            "id": "subterranean-recording",
+            "title": "サブテレリアン・フタリ・ボッチ",
+            "length": 200000,
+            "artist-credit": [{"artist": {"id": "nanaco-mbid"}}],
+            "disambiguation": "",
+        }],
+    )
+    assert spotify._title_match(
+        "Subterranean Futari Bocci", "Subterranean Futari Botchi"
+    ) is True
+    assert run_search(
+        monkeypatch,
+        "Subterranean Futari Bocci",
+        ["佐藤奈々子"],
+        "The Milky Way",
+        [candidate],
+    ) is None
+    assert recording_calls == []
+
+
 def test_cross_script_rescue_does_not_override_version_conflict(monkeypatch):
     candidate = track("tokai-live", "Tokai - Live", ["Taeko Onuki"], "SUNSHOWER")
     candidate.update({"external_ids": {"isrc": "JPCR07700360"}, "duration_ms": 310173})
