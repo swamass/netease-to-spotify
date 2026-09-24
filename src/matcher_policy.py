@@ -176,28 +176,89 @@ def apply(spotify: ModuleType) -> None:
         source_album: str,
         candidate: dict,
         allow_cross_script_title: bool = False,
+        diagnostics: dict | None = None,
     ) -> bool:
         isrc = (candidate.get("external_ids") or {}).get("isrc")
         if not isrc:
             return False
 
+        verification = {
+            "isrc": isrc,
+            "source": {
+                "title": source_name,
+                "artists": list(source_artists),
+                "album": source_album,
+            },
+            "spotify": {
+                "title": candidate.get("name", ""),
+                "artists": [
+                    artist.get("name", "")
+                    for artist in candidate.get("artists", [])
+                ],
+                "album": candidate.get("album", {}).get("name", ""),
+                "duration_ms": candidate.get("duration_ms"),
+                "isrc": isrc,
+            },
+            "allow_cross_script_title": allow_cross_script_title,
+            "predicates": {},
+        }
+        if diagnostics is not None:
+            diagnostics.setdefault("musicbrainz_verifications", []).append(verification)
+
         candidate_name = candidate.get("name", "")
+        verification["predicates"]["title_identity"] = (
+            "PASS"
+            if allow_cross_script_title or spotify._title_match(source_name, candidate_name)
+            else "FAIL"
+        )
         if (
             not allow_cross_script_title
             and not spotify._title_match(source_name, candidate_name)
         ):
+            verification["result"] = "NOT_CONFIRMED"
+            verification["failure_predicates"] = ["title_identity"]
             return False
 
-        if spotify._version_conflicts(
+        candidate_version_conflict = spotify._version_conflicts(
             source_name,
             source_album,
             candidate_name,
             candidate.get("album", {}).get("name", ""),
-        ):
+        )
+        verification["predicates"]["version_conflict"] = (
+            "FAIL" if candidate_version_conflict else "PASS"
+        )
+        if candidate_version_conflict:
+            verification["result"] = "NOT_CONFIRMED"
+            verification["failure_predicates"] = ["version_conflict"]
             return False
 
         recordings = spotify._musicbrainz_recordings_for_isrc(isrc)
         print(f"MB ISRC lookup: isrc={isrc} recording_count={len(recordings)}")
+        verification["recording_count"] = len(recordings)
+        verification["recordings"] = [
+            {
+                "mbid": recording.get("id"),
+                "title": recording.get("title", ""),
+                "length_ms": recording.get("length"),
+                "disambiguation": recording.get("disambiguation", ""),
+                "artist_credits": [
+                    {
+                        "name": credit.get("name") or credit.get("artist", {}).get("name", ""),
+                        "mbid": credit.get("artist", {}).get("id"),
+                    }
+                    for credit in recording.get("artist-credit", [])
+                ],
+                "releases": [
+                    {
+                        "title": release.get("title", ""),
+                        "release_group": (release.get("release-group") or {}).get("title", ""),
+                    }
+                    for release in recording.get("releases", [])
+                ],
+            }
+            for recording in recordings
+        ]
 
         artist_ids = spotify._musicbrainz_artist_identity(
             source_artists, candidate.get("artists", [])
@@ -208,10 +269,30 @@ def apply(spotify: ModuleType) -> None:
                 source_artists, candidate, recordings
             )
             identity_route = "artist-credit"
+        verification["artist_identity"] = {
+            "result": "CONFIRMED" if artist_ids else "NOT_CONFIRMED",
+            "route": identity_route,
+            "mbids": sorted(artist_ids),
+        }
         if not artist_ids:
+            verification["artist_identity"] = {
+                "result": "NOT_CONFIRMED",
+                "route": identity_route,
+                "mbids": [],
+            }
+            verification["predicates"]["artist_identity"] = "FAIL"
+            verification["result"] = "NOT_CONFIRMED"
+            verification["failure_predicates"] = ["artist_identity"]
             return False
 
         if not recordings:
+            verification["predicates"].update({
+                "artist_identity": "PASS",
+                "duration": "UNKNOWN",
+                "isrc_uniqueness": "NOT_FOUND",
+                "recording_title": "UNKNOWN",
+                "recording_artist": "UNKNOWN",
+            })
             confirmed = not allow_cross_script_title and identity_route == "artist"
             print(
                 "MB ISRC verification: "
@@ -219,11 +300,16 @@ def apply(spotify: ModuleType) -> None:
                 f"result={'CONFIRMED' if confirmed else 'NOT_CONFIRMED'} "
                 f"identity_route={identity_route}"
             )
+            verification["result"] = "CONFIRMED" if confirmed else "NOT_CONFIRMED"
+            verification["failure_predicates"] = (
+                [] if confirmed else ["recording_evidence"]
+            )
             return confirmed
 
         candidate_duration = spotify._coerce_duration_ms(candidate.get("duration_ms"))
         best_difference = None
         matched_recording = False
+        recording_predicates = []
 
         for recording in recordings:
             recording_artist_ids = {
@@ -231,34 +317,63 @@ def apply(spotify: ModuleType) -> None:
                 for credit in recording.get("artist-credit", [])
                 if credit.get("artist", {}).get("id")
             }
-            if not artist_ids & recording_artist_ids:
-                continue
-            if not spotify._title_match(source_name, recording.get("title", "")):
-                continue
-
+            recording_artist_match = bool(artist_ids & recording_artist_ids)
+            recording_title_match = spotify._title_match(
+                source_name, recording.get("title", "")
+            )
             disambiguation = recording.get("disambiguation", "")
-            if (
+            recording_version_conflict = bool(
                 spotify._version_conflicts(
-                    source_name,
-                    source_album,
-                    disambiguation,
-                    "",
+                    source_name, source_album, disambiguation, ""
                 )
                 or "djmix" in spotify._normalize_text(disambiguation)
-            ):
+            )
+            recording_duration = spotify._coerce_duration_ms(recording.get("length"))
+            difference = (
+                abs(recording_duration - candidate_duration)
+                if recording_duration and candidate_duration
+                else None
+            )
+            recording_predicates.append({
+                "mbid": recording.get("id"),
+                "artist_identity": "PASS" if recording_artist_match else "FAIL",
+                "title_identity": "PASS" if recording_title_match else "FAIL",
+                "duration": (
+                    "PASS" if difference is not None and difference <= 30000
+                    else "UNKNOWN" if difference is None else "FAIL"
+                ),
+                "duration_diff_ms": difference,
+                "version_conflict": "FAIL" if recording_version_conflict else "PASS",
+            })
+            if not recording_artist_match:
+                continue
+            if not recording_title_match:
+                continue
+            if recording_version_conflict:
                 continue
 
             matched_recording = True
-            duration = spotify._coerce_duration_ms(recording.get("length"))
-            difference = (
-                abs(duration - candidate_duration)
-                if duration and candidate_duration
-                else None
-            )
             if best_difference is None or (
                 difference is not None and difference < best_difference
             ):
                 best_difference = difference
+
+        verification["recording_predicates"] = recording_predicates
+        verification["predicates"].update({
+            "artist_identity": "PASS",
+            "recording_title": "PASS" if matched_recording else "FAIL",
+            "recording_artist": "PASS" if any(
+                row["artist_identity"] == "PASS" for row in recording_predicates
+            ) else "FAIL",
+            "duration": (
+                "PASS" if best_difference is not None and best_difference <= 30000
+                else "UNKNOWN" if best_difference is None else "FAIL"
+            ),
+            "isrc_uniqueness": (
+                "PASS" if len(recordings) == 1
+                else "MULTIPLE" if len(recordings) > 1 else "NOT_FOUND"
+            ),
+        })
 
         if allow_cross_script_title:
             confirmed = (
@@ -277,6 +392,11 @@ def apply(spotify: ModuleType) -> None:
             f"result={'CONFIRMED' if confirmed else 'NOT_CONFIRMED'} "
             f"identity_route={identity_route}"
         )
+        verification["result"] = "CONFIRMED" if confirmed else "NOT_CONFIRMED"
+        verification["failure_predicates"] = [] if confirmed else [
+            name for name, result in verification["predicates"].items()
+            if result in {"FAIL", "UNKNOWN", "NOT_FOUND"}
+        ]
         return confirmed
 
     spotify._musicbrainz_recording_identity_accepts = (

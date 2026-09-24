@@ -35,6 +35,40 @@ def test_cross_script_title_still_requires_recording_evidence(monkeypatch):
     ) is False
 
 
+def test_recording_verification_diagnostics_preserve_result(monkeypatch):
+    item = candidate("diag", "Song", "Artist", isrc="TESTDIAG")
+    recording = {
+        "id": "recording-mbid",
+        "title": "Song",
+        "length": 180000,
+        "artist-credit": [
+            {"name": "Artist", "artist": {"id": "artist-mbid", "name": "Artist"}}
+        ],
+        "disambiguation": "",
+        "releases": [{"title": "Album", "release-group": {"title": "Album"}}],
+    }
+    item["duration_ms"] = 180000
+    monkeypatch.setattr(
+        spotify, "_musicbrainz_artist_identity", lambda *_args, **_kwargs: {"artist-mbid"}
+    )
+    monkeypatch.setattr(
+        spotify, "_musicbrainz_recordings_for_isrc", lambda _isrc: [recording]
+    )
+    diagnostics = {}
+
+    assert spotify._musicbrainz_recording_identity_accepts(
+        "Song", ["Artist"], "Album", item, diagnostics=diagnostics
+    ) is True
+
+    verification = diagnostics["musicbrainz_verifications"][0]
+    assert verification["recording_count"] == 1
+    assert verification["recordings"][0]["mbid"] == "recording-mbid"
+    assert verification["predicates"]["title_identity"] == "PASS"
+    assert verification["predicates"]["artist_identity"] == "PASS"
+    assert verification["predicates"]["duration"] == "PASS"
+    assert verification["result"] == "CONFIRMED"
+
+
 def test_version_conflict_remains_hard_reject(monkeypatch):
     item = candidate("remix", "余韻 - Remix", "Takao Kisugi", isrc="TESTREMIX")
     monkeypatch.setattr(spotify, "_musicbrainz_artist_identity", lambda *_args, **_kwargs: {"same-artist-mbid"})

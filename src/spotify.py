@@ -882,6 +882,7 @@ def search_track(
                         identity_verified = _musicbrainz_recording_identity_accepts(
                             name, artists, album, item,
                             allow_cross_script_title=cross_script_title_rescue,
+                            diagnostics=diagnostics,
                         )
                         print(
                             "MusicBrainz ISRC recording verification: "
