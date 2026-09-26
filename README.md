@@ -50,9 +50,17 @@ python setup.py
 
 ### 4. 获取网易云 Cookie
 
-先登录 [网易云音乐网页版](https://music.163.com/)。以 Chrome 为例，打开开发者工具，进入 **Application → Storage → Cookies → https://music.163.com**，复制自己登录会话的完整 Cookie 内容；也可以在 **Network** 请求的 **Request Headers → Cookie** 中复制。
+Cookie 是网易云网页版的登录凭证。它可能过期，不能保证永久有效；**不要把 Cookie 发到聊天、Issue、截图或提交到代码仓库。**
 
-不要复制 `Cookie:` 这个字段名，只复制后面的完整内容，并填入 `NETEASE_COOKIE`。Cookie 是敏感信息，可能过期，不能提交到仓库。
+以 Chrome 为例：
+
+1. 打开 [网易云音乐网页版](https://music.163.com/) 并确认已经登录。
+2. 打开开发者工具，切到 **Network（网络）**，选择 **Fetch/XHR**，然后刷新网页（Mac 按 `⌘R`）。
+3. 在请求列表中点开一个发往 `music.163.com` 的请求；右侧选 **Headers（标头）**。
+4. 在 **Request Headers（请求标头）** 中找到 `Cookie`，复制它后面的完整内容。不要复制字段名 `Cookie:`，也不要只复制某一个 Cookie 项。
+5. 将这段内容作为 `NETEASE_COOKIE` 的值保存到自己 Fork 的 GitHub Actions Secret（见下一节）。
+
+如果请求标头里没有 `Cookie`，先确认网页已登录，再刷新并查看新请求。不同请求显示的 Cookie 内容可能不同；请选网易云页面刚发出的请求，并复制其完整的 `Cookie` 请求标头。
 
 ### 5. 配置 GitHub Secrets
 
@@ -68,6 +76,8 @@ python setup.py
 | `SPOTIFY_PLAYLIST_ID` | 目标 Spotify Playlist ID |
 | `NETEASE_COOKIE` | 自己网易云登录会话的完整 Cookie |
 
+Secret 保存后 GitHub 不会再显示原值，这是正常的。以后 Cookie 更新时，修改已有的 `NETEASE_COOKIE` Secret 即可，不要改 Secret 名称。
+
 ### 6. 先运行 Dry Run
 
 打开自己的仓库 **Actions → NetEase Spotify Match Dry Run → Run workflow**。运行完成后查看日志和 Artifacts。
@@ -80,16 +90,34 @@ Dry Run 只获取推荐、搜索和匹配，不会清空、添加或修改 Spoti
 
 正式同步会用当天成功匹配的歌曲替换目标 Playlist，建议为本项目创建独立 Playlist。之后 GitHub Actions 会按 workflow 的 schedule 自动运行，当前 cron `0 22 * * *` 对应北京时间次日约 06:00，实际可能有调度延迟。
 
+## Cookie 失效后如何恢复
+
+如果 Actions 日志出现类似：
+
+```text
+NetEase API returned code 301: 获取用户信息失败
+```
+
+通常表示网易云接口没有接受当前登录会话。Cookie 可能已过期、失效，或复制时没有包含有效登录态；这不一定代表 Spotify 或歌曲搜索出了问题。
+
+按下面步骤更新，不需要改代码：
+
+1. 在网易云网页版重新登录。
+2. 按上面「4. 获取网易云 Cookie」的步骤，在 Network 请求的 **Request Headers → Cookie** 中复制新的完整 Cookie。
+3. 打开自己 Fork 的 **Settings → Secrets and variables → Actions**，在 Repository secrets 中找到 `NETEASE_COOKIE`，点 **Update**（如果没有这个 Secret，则点 **New repository secret**）。名称仍填写 `NETEASE_COOKIE`，值粘贴刚复制的 Cookie 并保存。
+4. 打开 **Actions → Sync NetEase Daily Recommendations → Run workflow**，选 `main` 分支并启动一次正式同步。
+5. 等待运行结束：绿色勾号表示 workflow 成功；再查看日志中的同步结果，确认歌曲已添加到目标 Spotify Playlist。若仍报 301，请重新登录后再复制一次，并确认复制的是完整的 `Cookie` 请求标头，而不是某一个单独 Cookie。
+
+每个使用者都应在自己的 Fork 中保存自己的 Cookie。Cookie 需要在失效时手动更新；重新登录、更新 Secret 后再次运行 workflow 即可恢复。更新 Cookie 本身不会改动代码或 Playlist，只有运行正式同步时才会更新 Playlist。
+
 ## 匹配优化
 
 **Latest**
 
-- 改进跨语言艺人名识别
-- 支持简繁体与部分中日汉字差异
-- 减少同名歌曲与错误艺人误匹配
-- 改进 Live / Remix / Acoustic / Cover 等版本识别
-- 兼容不同平台的专辑名与时长差异
-- 加入 MusicBrainz / ISRC 辅助验证
+- Spotify 搜索分两步进行：先用歌曲名、主要艺人和专辑名搜索；若没有可靠结果，再去掉专辑条件重试。每步最多取 10 个候选，避免无界搜索。
+- 对候选综合检查歌曲名、艺人、专辑和时长，并规范化大小写、标点、简繁体及部分中日汉字差异；识别已知别名和 Live、Remix、Acoustic 等版本信息。
+- 对跨语言/跨文字系统的歌曲名，不会仅凭近似标题认定匹配；需要艺人身份以及 MusicBrainz / ISRC 等独立录音信息提供支持，并检查时长和版本是否冲突。
+- 翻唱、致敬、卡拉 OK、版本不符或证据不足的候选会被拒绝；不确定的歌曲会跳过，而不是猜测。
 
 匹配策略保持保守：**无法可靠确认的歌曲会跳过，而不是强行匹配。**
 
