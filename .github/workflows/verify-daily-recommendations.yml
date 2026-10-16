@@ -1,0 +1,45 @@
+name: Verify NetEase Daily Recommendations
+
+on:
+  push:
+    paths:
+      - "src/netease.py"
+      - ".github/workflows/verify-daily-recommendations.yml"
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Fetch recommendations without writing to Spotify
+        env:
+          NETEASE_COOKIE: ${{ secrets.NETEASE_COOKIE }}
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import os
+          from src.netease import get_daily_recommendations
+
+          cookie = os.environ.get("NETEASE_COOKIE", "").strip()
+          if not cookie:
+              raise SystemExit("NETEASE_COOKIE secret is missing.")
+
+          songs = get_daily_recommendations(cookie, verbose=False)
+          print(f"Read-only integration result: {len(songs)} daily recommendations.")
+          if len(songs) != 32:
+              raise SystemExit(
+                  f"Expected 32 daily recommendations, received {len(songs)}."
+              )
+          print("PASS: exactly 32 daily recommendations fetched; Spotify was not contacted.")
+          PY

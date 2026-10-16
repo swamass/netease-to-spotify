@@ -161,7 +161,8 @@ def _normalize_text(value: str) -> str:
 
 
 def _spotify_query_value(value: str) -> str:
-    return re.sub(r"\s+", " ", value.replace('"', " ")).strip()
+    value = value.replace('"', " ").replace("*", " ")
+    return re.sub(r"\s+", " ", value).strip()
 
 
 ARTIST_ALIASES = {
@@ -181,6 +182,16 @@ ARTIST_ALIASES = {
     "中原めいこ": ["Meiko Nakahara"],
     "松下誠": ["Makoto Matsushita"],
     "福原美穂": ["Miho Fukuhara"],
+    "Olver Cheatham": ["Oliver Cheatham"],
+}
+
+# A known source-catalog typo. Search with the canonical spelling, but require
+# a close duration match before accepting the corrected artist identity.
+ARTIST_QUERY_CORRECTIONS = {
+    "olvercheatham": "Oliver Cheatham",
+}
+DURATION_REQUIRED_ARTIST_CORRECTIONS = {
+    "olvercheatham": {"olivercheatham"},
 }
 
 TITLE_ALIASES = {
@@ -190,6 +201,11 @@ TITLE_ALIASES = {
         "True to Your Heart (From Mulan)",
     ],
     "Just My Imagination": ["Just My Imagination (Running Away with Me)"],
+}
+
+# The source catalog masks one letter in this title with an asterisk.
+TITLE_QUERY_CORRECTIONS = {
+    "coc*ine diana": "Cocaine Diana",
 }
 
 SAFE_VERSION_TERMS = {
@@ -203,11 +219,32 @@ HARD_VERSION_TERMS = {
 INVALID_RELEASE_TERMS = {"tribute", "cover", "karaoke"}
 
 
+VERSION_TERM_PATTERNS = {
+    "remaster": r"remaster(?:ed)?",
+    "remastered": r"remaster(?:ed)?",
+    "rerelease": r"re[\s_-]*release",
+    "deluxeedition": r"deluxe[\s_-]*edition",
+    "expandededition": r"expanded[\s_-]*edition",
+    "anniversaryedition": r"anniversary[\s_-]*edition",
+    "specialedition": r"special[\s_-]*edition",
+    "remix": r"remix(?:ed|es)?",
+    "remixed": r"remix(?:ed|es)?",
+    "radioedit": r"radio[\s_-]*edit",
+    "extendedmix": r"extended[\s_-]*mix",
+    "djversion": r"dj[\s_-]*version",
+    "djmixed": r"dj[\s_-]*mixed",
+    "speedup": r"speed[\s_-]*up",
+    "tribute": r"tributes?",
+    "cover": r"covers?",
+}
+
+
 def _version_terms(value: str) -> set[str]:
-    normalized = _normalize_text(value)
+    normalized = unicodedata.normalize("NFKC", value).casefold()
     terms = set()
     for term in SAFE_VERSION_TERMS | HARD_VERSION_TERMS | INVALID_RELEASE_TERMS:
-        if term in normalized:
+        pattern = VERSION_TERM_PATTERNS.get(term, re.escape(term))
+        if re.search(rf"(?<![a-z0-9])(?:{pattern})(?![a-z0-9])", normalized):
             terms.add(term)
     return terms
 
@@ -357,6 +394,23 @@ def _artist_match_score(
         return 0.35, 0, False
 
     return 0.0, 0, False
+
+
+def _artist_correction_requires_duration(
+    source_artists: list[str],
+    spotify_artists: list[dict],
+) -> bool:
+    candidate_names = {
+        _normalize_text(artist.get("name", ""))
+        for artist in spotify_artists
+        if artist.get("name")
+    }
+    return any(
+        candidate_names & DURATION_REQUIRED_ARTIST_CORRECTIONS.get(
+            _normalize_text(source_artist), set()
+        )
+        for source_artist in source_artists
+    )
 
 
 def _musicbrainz_get(path: str, params: dict[str, str]) -> dict[str, Any] | None:
@@ -728,8 +782,17 @@ def search_track(
             "signals": [],
         })
 
-    query_name = _spotify_query_value(name)
-    query_artist = _spotify_query_value(artists[0])
+    query_title_key = re.sub(
+        r"\s+",
+        " ",
+        unicodedata.normalize("NFKC", name).casefold(),
+    ).strip()
+    query_title = TITLE_QUERY_CORRECTIONS.get(query_title_key, name)
+    query_name = _spotify_query_value(query_title)
+    query_artist_name = ARTIST_QUERY_CORRECTIONS.get(
+        _normalize_text(artists[0]), artists[0]
+    )
+    query_artist = _spotify_query_value(query_artist_name)
     query_album = _spotify_query_value(album)
     queries = [
         f'track:"{query_name}" artist:"{query_artist}"'
@@ -827,9 +890,21 @@ def search_track(
             baseline_artist_acceptable = _baseline_artist_acceptable(
                 artist_score, artist_reliable, title_exact, album_points
             )
-            baseline_accept = (
-                title_matches and not version_reasons and baseline_artist_acceptable
+            artist_correction_requires_duration = _artist_correction_requires_duration(
+                artists, item_artists
             )
+            duration_corroborated = duration_points >= 40
+            baseline_accept = (
+                title_matches
+                and not version_reasons
+                and baseline_artist_acceptable
+                and (
+                    not artist_correction_requires_duration
+                    or duration_corroborated
+                )
+            )
+            if artist_correction_requires_duration and not duration_corroborated:
+                reasons.append("artist spelling correction lacks duration corroboration")
             spotify_isrc = (item.get("external_ids") or {}).get("isrc")
             print(
                 "MusicBrainz fallback: "

@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "src/spotify.py"
+      - "src/netease.py"
       - "src/__init__.py"
       - "src/matcher_policy.py"
       - "src/retrieval_policy.py"
@@ -15,6 +16,7 @@ on:
       - "src/auto_title_alias_spotcheck.py"
       - "src/tunemymusic_failure_diagnostic.py"
       - "tests/test_spotify_matching.py"
+      - "tests/test_netease.py"
       - "tests/test_matcher_policy.py"
       - "tests/test_retrieval_policy.py"
       - "tests/test_retrieval_policy_hardening.py"
@@ -29,6 +31,7 @@ on:
       - "data/tunemymusic_baseline_97_of_140.json"
       - "requirements.txt"
       - ".github/workflows/matching-tests.yml"
+      - ".github/workflows/verify-daily-recommendations.yml"
   workflow_dispatch:
 
 jobs:
