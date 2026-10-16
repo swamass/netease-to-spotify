@@ -161,9 +161,8 @@ def _normalize_text(value: str) -> str:
 
 
 def _spotify_query_value(value: str) -> str:
-    value = value.replace('"', " ")
-    value = re.sub(r"(?<=\w)\*(?=\w)", "", value)
-    return re.sub(r"\s+", " ", value.replace("*", " ")).strip()
+    value = value.replace('"', " ").replace("*", " ")
+    return re.sub(r"\s+", " ", value).strip()
 
 
 ARTIST_ALIASES = {
@@ -202,6 +201,11 @@ TITLE_ALIASES = {
         "True to Your Heart (From Mulan)",
     ],
     "Just My Imagination": ["Just My Imagination (Running Away with Me)"],
+}
+
+# The source catalog masks one letter in this title with an asterisk.
+TITLE_QUERY_CORRECTIONS = {
+    "coc*ine diana": "Cocaine Diana",
 }
 
 SAFE_VERSION_TERMS = {
@@ -778,7 +782,13 @@ def search_track(
             "signals": [],
         })
 
-    query_name = _spotify_query_value(name)
+    query_title_key = re.sub(
+        r"\s+",
+        " ",
+        unicodedata.normalize("NFKC", name).casefold(),
+    ).strip()
+    query_title = TITLE_QUERY_CORRECTIONS.get(query_title_key, name)
+    query_name = _spotify_query_value(query_title)
     query_artist_name = ARTIST_QUERY_CORRECTIONS.get(
         _normalize_text(artists[0]), artists[0]
     )
