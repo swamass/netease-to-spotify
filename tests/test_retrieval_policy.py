@@ -249,6 +249,9 @@ def test_default_title_variant_hook_preserves_current_query(monkeypatch):
     calls = []
     monkeypatch.setattr(retrieval_policy, "_diagnostic_title_variant_hook", None)
     monkeypatch.setattr(
+        spotify, "_retrieval_artist_alias", lambda _artist: None, raising=False
+    )
+    monkeypatch.setattr(
         spotify,
         "_spotify_get",
         lambda _url, _token, params: calls.append(params) or FakeResponse([]),
