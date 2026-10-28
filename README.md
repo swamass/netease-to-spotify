@@ -90,6 +90,59 @@ Dry Run 只获取推荐、搜索和匹配，不会清空、添加或修改 Spoti
 
 正式同步会用当天成功匹配的歌曲替换目标 Playlist，建议为本项目创建独立 Playlist。之后 GitHub Actions 会按 workflow 的 schedule 自动运行，当前 cron `0 22 * * *` 对应北京时间次日约 06:00，实际可能有调度延迟。
 
+### 本地自动同步（macOS）
+
+这是与 GitHub Actions 分开的本地方案：它不会上传 Cookie、凭据或同步日志，也不会改变 GitHub Actions 的配置。它需要一台持续使用的 macOS 用户会话；LaunchAgent 每 5 分钟轮询一次，但每天只在北京时间 06:10 之后执行一次。
+
+#### 首次设置
+
+1. 在项目根目录创建 Python 3.12 虚拟环境并安装依赖：
+
+   ```bash
+   python3.12 -m venv .venv
+   .venv/bin/pip install -r local-requirements.txt
+   .venv/bin/python -m playwright install chromium
+   ```
+
+2. 运行 `.venv/bin/python setup.py` 完成 Spotify OAuth。按提示输入 Client ID、Client Secret、目标 Playlist URL 或 ID，并选择 Playlist 是否公开。成功后 OAuth 值会以 600 权限保存到 `~/.config/netease-to-spotify/.env`；不要把这个文件复制到仓库、提交到 Git 或发送给别人。确认其中还包含 `SPOTIFY_PLAYLIST_ID`，并检查权限：
+
+   ```bash
+   chmod 600 ~/.config/netease-to-spotify/.env
+   ```
+
+   本地运行需要这四个变量：`SPOTIFY_CLIENT_ID`、`SPOTIFY_CLIENT_SECRET`、`SPOTIFY_REFRESH_TOKEN`、`SPOTIFY_PLAYLIST_ID`。网易云 Cookie 不写入 `.env`，而是从独立的 Playwright 浏览器 Profile 读取。
+
+3. 先手动运行一次：`.venv/bin/python scripts/local_sync.py`。第一次运行会打开独立浏览器 Profile，请手动登录网易云；密码不会被脚本读取或保存。成功后确认 Spotify Playlist 已更新。
+
+#### 安装、验证和手动运行
+
+安装 LaunchAgent：
+
+```bash
+scripts/install_local_sync.sh
+launchctl print "gui/$(id -u)/com.swamass.netease-to-spotify"
+```
+
+`launchctl print` 能显示该服务即表示已加载。再次手动同步使用 `.venv/bin/python scripts/local_sync.py`；只想停止自动运行可执行 `scripts/uninstall_local_sync.sh`，不会删除浏览器 Profile、状态或日志。
+
+任务每 5 分钟被 macOS 唤醒一次，但由 Python `zoneinfo` 按北京时间判断，只有每天 06:10 之后首次运行才会执行；每天最多执行一次。Mac 在计划时间睡眠时，醒来后会在当天 06:10 之后补执行。失败后当天不会自动重试，需查看日志、修复问题后手动运行；失败时会显示 macOS 通知。日志保存在 `~/Library/Logs/netease-to-spotify/sync.log` 和 `sync.error.log`，可用以下命令查看：
+
+```bash
+tail -f ~/Library/Logs/netease-to-spotify/sync.log \
+  ~/Library/Logs/netease-to-spotify/sync.error.log
+```
+
+网易云返回 301、浏览器登录态失效或推荐为空时会停止，现有 Spotify Playlist 不会被清空。
+
+#### 故障排查
+
+- `Missing local environment values`：检查 `~/.config/netease-to-spotify/.env` 是否包含上面的四个变量，并确认权限为 600。
+- `网易云浏览器会话未登录或已失效`：再次运行本地同步，在打开的独立浏览器中登录网易云；不要把 Cookie 复制到 `.env` 或日志。
+- `launchctl print` 找不到服务：重新运行 `scripts/install_local_sync.sh`，并确认 `.venv/bin/python` 存在。
+- Spotify Playlist 没有更新：先运行一次手动同步并查看两个本地日志文件；如果当天已经尝试过一次，LaunchAgent 不会自动重试，修复后请手动运行。
+
+本地自动同步只适用于 macOS；GitHub Actions 仍按上文的 Secrets 和 workflow 运行，两者互不替代。
+
 ## Cookie 失效后如何恢复
 
 如果 Actions 日志出现类似：

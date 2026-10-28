@@ -1003,22 +1003,22 @@ def search_track(
 def replace_playlist_tracks(
     access_token: str,
     playlist_id: str,
+    track_ids: list[str],
 ) -> None:
-    """Remove all existing tracks using Spotify's playlist replace endpoint."""
+    """Replace playlist contents in one Spotify playlist-items request."""
+    uris = [f"spotify:track:{track_id}" for track_id in track_ids]
     response = requests.put(
         f"{SPOTIFY_API_URL}/playlists/{playlist_id}/items",
         headers={
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
         },
-        json={"uris": []},
+        json={"uris": uris},
         timeout=30,
     )
 
-    print("Spotify playlist clear status:", response.status_code)
+    print("Spotify playlist replace status:", response.status_code)
     response.raise_for_status()
-
-    print("Cleared existing Spotify playlist tracks.")
 
 def add_tracks_to_playlist(
     access_token: str,

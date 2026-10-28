@@ -3,7 +3,6 @@ import requests
 from src.config import load_settings
 from src.netease import get_daily_recommendations
 from src.spotify import (
-    add_tracks_to_playlist,
     get_access_token,
     SpotifyRateLimitError,
     replace_playlist_tracks,
@@ -46,11 +45,12 @@ def check_playlist(
     print("Spotify playlist access: OK")
 
 
-def main() -> None:
+def main(songs: list[dict] | None = None) -> None:
     settings = load_settings()
 
-    print("Getting NetEase daily recommendations...")
-    songs = get_daily_recommendations(settings.netease_cookie)
+    if songs is None:
+        print("Getting NetEase daily recommendations...")
+        songs = get_daily_recommendations(settings.netease_cookie)
     print(f"Found {len(songs)} NetEase daily recommendations.")
 
     if not songs:
@@ -108,11 +108,6 @@ def main() -> None:
         )
 
     replace_playlist_tracks(
-        access_token,
-        settings.spotify_playlist_id,
-    )
-
-    add_tracks_to_playlist(
         access_token,
         settings.spotify_playlist_id,
         track_ids,
