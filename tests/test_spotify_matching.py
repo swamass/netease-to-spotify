@@ -184,6 +184,80 @@ def test_all_explicit_recording_conflicts_are_rejected(monkeypatch):
         assert result is None
 
 
+def test_asterisk_inside_title_is_removed_from_spotify_query(monkeypatch):
+    calls = []
+    candidate = track(
+        "cocaine-diana",
+        "Cocaine Diana",
+        ["Kid Loco"],
+        "Kill your darlings",
+    )
+    candidate["duration_ms"] = 260132
+    monkeypatch.setattr(
+        spotify,
+        "_spotify_get",
+        lambda _url, _token, params: calls.append(params) or FakeResponse([candidate]),
+    )
+
+    result = spotify.search_track(
+        "test-token",
+        "Coc*ine Diana",
+        ["Kid Loco"],
+        "Kill your darlings",
+        260132,
+    )
+
+    assert result == "cocaine-diana"
+    assert calls[0]["q"] == (
+        'track:"Cocaine Diana" artist:"Kid Loco" album:"Kill your darlings"'
+    )
+
+
+def test_version_terms_use_word_boundaries_for_live():
+    assert "live" not in spotify._version_terms("Oliver Cheatham at His Best")
+    assert "live" in spotify._version_terms("Get Down Saturday Night - Live")
+    assert "live" in spotify._version_terms("Live at Wembley")
+
+
+def test_olver_cheatham_spelling_correction_requires_duration_match(monkeypatch):
+    source_album = "Grand Theft Auto: Vice City Official Soundtrack Box Set"
+    wrong_version = track(
+        "short-edit",
+        "Get Down Saturday Night",
+        ["Oliver Cheatham"],
+        "Disco Party 2021",
+    )
+    wrong_version["duration_ms"] = 241906
+    matching_version = track(
+        "original-length",
+        "Get Down Saturday Night",
+        ["Oliver Cheatham"],
+        "Saturday Night (Expanded Edition)",
+    )
+    matching_version["duration_ms"] = 388573
+    candidates = [wrong_version]
+    calls = []
+    monkeypatch.setattr(
+        spotify,
+        "_spotify_get",
+        lambda _url, _token, params: calls.append(params) or FakeResponse(candidates),
+    )
+
+    def search():
+        return spotify.search_track(
+            "test-token",
+            "Get Down Saturday Night",
+            ["Olver Cheatham"],
+            source_album,
+            388573,
+        )
+
+    assert search() is None
+    candidates.append(matching_version)
+    assert search() == "original-length"
+    assert all('artist:"Oliver Cheatham"' in call["q"] for call in calls)
+
+
 def test_murata_song_accepts_remaster_from_different_album(monkeypatch):
     result = run_search(
         monkeypatch,
@@ -895,25 +969,31 @@ def test_musicbrainz_rescues_japanese_title_with_romanized_candidate(monkeypatch
         "duration_ms": 310173,
     })
 
-    def fake_get(url, params, **_kwargs):
-        if url.endswith("/artist"):
-            return FakeMBResponse({"artists": [{"id": "taeko-mbid"}]})
-        if url.endswith("/isrc/JPCR07700360"):
-            return FakeMBResponse({"recordings": [{"id": "tokai-normal"}, {"id": "tokai-dj"}]})
-        if url.endswith("/recording/tokai-dj"):
-            return FakeMBResponse({
-                "id": "tokai-dj", "title": "都会", "length": 109000,
+    monkeypatch.setattr(
+        spotify,
+        "_musicbrainz_artist_identity",
+        lambda *_args: {"taeko-mbid"},
+    )
+    monkeypatch.setattr(
+        spotify,
+        "_musicbrainz_recordings_for_isrc",
+        lambda _isrc: [
+            {
+                "id": "tokai-dj",
+                "title": "都会",
+                "length": 109000,
                 "artist-credit": [{"artist": {"id": "taeko-mbid"}}],
                 "disambiguation": "DJ-mix",
-            })
-        return FakeMBResponse({
-            "id": "tokai-normal", "title": "都会", "length": 310173,
-            "artist-credit": [{"artist": {"id": "taeko-mbid"}}],
-            "disambiguation": "",
-        })
-
-    monkeypatch.setattr(spotify.requests, "get", fake_get)
-    monkeypatch.setattr(spotify.time, "sleep", lambda *_args: None)
+            },
+            {
+                "id": "tokai-normal",
+                "title": "都会",
+                "length": 310173,
+                "artist-credit": [{"artist": {"id": "taeko-mbid"}}],
+                "disambiguation": "",
+            },
+        ],
+    )
     assert run_search(monkeypatch, "都会", ["大貫妙子"], "Sunshower", [candidate]) == "tokai"
 
 

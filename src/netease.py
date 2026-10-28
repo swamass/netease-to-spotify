@@ -135,7 +135,7 @@ def _get_duration_ms(song: dict) -> int | None:
     return duration_ms if duration_ms > 0 else None
 
 
-def get_daily_recommendations(cookie: str) -> list[dict]:
+def get_daily_recommendations(cookie: str, *, verbose: bool = True) -> list[dict]:
     """
     获取网易云音乐：
     个性化推荐 → 每日歌曲推荐
@@ -144,6 +144,9 @@ def get_daily_recommendations(cookie: str) -> list[dict]:
 
     payload = {
         "csrf_token": csrf_token,
+        "limit": "32",
+        "offset": "0",
+        "total": "true",
     }
 
     encrypted = _encrypt_request(payload)
@@ -190,16 +193,15 @@ def get_daily_recommendations(cookie: str) -> list[dict]:
             "The cookie may be expired or invalid."
         )
 
-    print("\n===== NetEase Daily Recommendations =====")
+    if verbose:
+        print("\n===== NetEase Daily Recommendations =====")
 
-    for index, song in enumerate(songs, start=1):
-        name = song.get("name", "")
+        for index, song in enumerate(songs, start=1):
+            name = song.get("name", "")
+            artists = ", ".join(_get_artist_names(song))
+            print(f"{index:02d}. {name} - {artists}")
 
-        artists = ", ".join(_get_artist_names(song))
-
-        print(f"{index:02d}. {name} - {artists}")
-
-    print("==========================================")
+        print("==========================================")
     print(f"Found {len(songs)} NetEase daily recommendations.\n")
 
     return [
