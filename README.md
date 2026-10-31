@@ -1,9 +1,10 @@
-# 网易云每日推荐 → Spotify
+# 网易云音乐推荐 → Spotify
 
-自动获取网易云音乐「每日推荐」，在 Spotify 中搜索并保守匹配，然后同步到指定 Spotify Playlist。项目通过 GitHub Actions 自动运行，不需要自己长期运行服务器。
+自动获取网易云音乐「每日推荐」，并可选获取「私人雷达」歌曲，在 Spotify 中搜索并保守匹配，然后分别同步到指定 Spotify Playlist。项目通过 GitHub Actions 自动运行，不需要自己长期运行服务器。
 
 ```text
-网易云每日推荐 → Spotify 搜索与匹配 → 自动同步到 Playlist
+网易云每日推荐 → Spotify 每日推荐歌单
+网易云私人雷达 → Spotify 雷达歌单（可选）
 ```
 
 无法可靠确认的歌曲会跳过，而不是强行匹配。
@@ -46,11 +47,11 @@ python -m pip install -r requirements.txt
 python setup.py
 ```
 
-按提示输入 Spotify Playlist URL 或 ID，并完成 Spotify 授权。Setup 会显示需要保存的 `SPOTIFY_REFRESH_TOKEN`，不会自动上传或保存凭据。
+按提示输入每日推荐目标 Playlist，以及可选的私人雷达目标 Playlist，并完成 Spotify 授权。Setup 会将 OAuth 凭据和 Playlist ID 保存到本机配置文件，不会上传到仓库。
 
 ### 4. 获取网易云 Cookie
 
-Cookie 是网易云网页版的登录凭证。它可能过期，不能保证永久有效；**不要把 Cookie 发到聊天、Issue、截图或提交到代码仓库。**
+项目通过 [wyy.yiton.uk](https://wyy.yiton.uk/) 提供的 NeteaseCloudMusicApi Enhanced 服务读取网易云推荐和私人雷达歌单；该服务是第三方 API，不是网易云官方服务。为获取个性化数据，程序会把网易云登录 Cookie 通过 HTTPS 请求发送给该服务。请只在信任该服务的情况下使用；Cookie 可能过期，不能保证永久有效。**不要把 Cookie 发到聊天、Issue、截图或提交到代码仓库。**
 
 以 Chrome 为例：
 
@@ -73,7 +74,8 @@ Cookie 是网易云网页版的登录凭证。它可能过期，不能保证永�
 | `SPOTIFY_CLIENT_ID` | Spotify App 的 Client ID |
 | `SPOTIFY_CLIENT_SECRET` | Spotify App 的 Client Secret |
 | `SPOTIFY_REFRESH_TOKEN` | `setup.py` 获取的 Refresh Token |
-| `SPOTIFY_PLAYLIST_ID` | 目标 Spotify Playlist ID |
+| `SPOTIFY_PLAYLIST_ID` | 每日推荐的目标 Spotify Playlist ID |
+| `SPOTIFY_RADAR_PLAYLIST_ID` | （可选）私人雷达的独立 Spotify Playlist ID |
 | `NETEASE_COOKIE` | 自己网易云登录会话的完整 Cookie |
 
 Secret 保存后 GitHub 不会再显示原值，这是正常的。以后 Cookie 更新时，修改已有的 `NETEASE_COOKIE` Secret 即可，不要改 Secret 名称。
@@ -86,13 +88,15 @@ Dry Run 只获取推荐、搜索和匹配，不会清空、添加或修改 Spoti
 
 ### 7. 运行正式同步
 
-确认 Dry Run 没有配置或认证错误后，打开 **Actions → Sync NetEase Daily Recommendations → Run workflow**。
+先创建一个专门用于私人雷达的 Spotify Playlist，并将它的 ID 保存为 `SPOTIFY_RADAR_PLAYLIST_ID` Secret。不要把它设成 `SPOTIFY_PLAYLIST_ID`：两个歌单会分别被当天匹配到的歌曲替换，使用同一个目标会互相覆盖。未配置 `SPOTIFY_RADAR_PLAYLIST_ID` 时，只同步每日推荐。
 
-正式同步会用当天成功匹配的歌曲替换目标 Playlist，建议为本项目创建独立 Playlist。之后 GitHub Actions 会按 workflow 的 schedule 自动运行，当前 cron `0 22 * * *` 对应北京时间次日约 06:00，实际可能有调度延迟。
+确认 Dry Run 没有配置或认证错误后，打开 **Actions → Sync NetEase Recommendations → Run workflow**。
+
+正式同步会分别用当天成功匹配的每日推荐和私人雷达歌曲替换各自的目标 Playlist。之后 GitHub Actions 会按 workflow 的 schedule 自动运行，当前 cron `0 22 * * *` 对应北京时间次日约 06:00，实际可能有调度延迟。
 
 ### 本地自动同步（macOS）
 
-这是与 GitHub Actions 分开的本地方案：它不会上传 Cookie、凭据或同步日志，也不会改变 GitHub Actions 的配置。它需要一台持续使用的 macOS 用户会话；LaunchAgent 每 5 分钟轮询一次，但每天只在北京时间 06:10 之后执行一次。
+这是与 GitHub Actions 分开的本地方案：它不会上传凭据或同步日志，也不会改变 GitHub Actions 的配置。网易云 Cookie 会随 API 请求发送到上面提到的第三方服务，不会写入本地 `.env`。它需要一台持续使用的 macOS 用户会话；LaunchAgent 每 5 分钟轮询一次，但每天只在北京时间 06:10 之后执行一次。
 
 #### 首次设置
 
@@ -104,13 +108,13 @@ Dry Run 只获取推荐、搜索和匹配，不会清空、添加或修改 Spoti
    .venv/bin/python -m playwright install chromium
    ```
 
-2. 运行 `.venv/bin/python setup.py` 完成 Spotify OAuth。按提示输入 Client ID、Client Secret、目标 Playlist URL 或 ID，并选择 Playlist 是否公开。成功后 OAuth 值会以 600 权限保存到 `~/.config/netease-to-spotify/.env`；不要把这个文件复制到仓库、提交到 Git 或发送给别人。确认其中还包含 `SPOTIFY_PLAYLIST_ID`，并检查权限：
+2. 运行 `.venv/bin/python setup.py` 完成 Spotify OAuth。按提示输入 Client ID、Client Secret、每日推荐目标 Playlist，以及可选的私人雷达目标 Playlist，并选择各目标是否公开。成功后 OAuth 值会以 600 权限保存到 `~/.config/netease-to-spotify/.env`；不要把这个文件复制到仓库、提交到 Git 或发送给别人。确认其中包含 `SPOTIFY_PLAYLIST_ID`，以及启用雷达同步时的 `SPOTIFY_RADAR_PLAYLIST_ID`，并检查权限：
 
    ```bash
    chmod 600 ~/.config/netease-to-spotify/.env
    ```
 
-   本地运行需要这四个变量：`SPOTIFY_CLIENT_ID`、`SPOTIFY_CLIENT_SECRET`、`SPOTIFY_REFRESH_TOKEN`、`SPOTIFY_PLAYLIST_ID`。网易云 Cookie 不写入 `.env`，而是从独立的 Playwright 浏览器 Profile 读取。
+   本地运行需要 `SPOTIFY_CLIENT_ID`、`SPOTIFY_CLIENT_SECRET`、`SPOTIFY_REFRESH_TOKEN`、`SPOTIFY_PLAYLIST_ID`，以及可选的 `SPOTIFY_RADAR_PLAYLIST_ID`。如配置雷达歌单 ID，本地同步也会获取私人雷达。
 
 3. 先手动运行一次：`.venv/bin/python scripts/local_sync.py`。第一次运行会打开独立浏览器 Profile，请手动登录网易云；密码不会被脚本读取或保存。成功后确认 Spotify Playlist 已更新。
 
@@ -158,7 +162,7 @@ NetEase API returned code 301: 获取用户信息失败
 1. 在网易云网页版重新登录。
 2. 按上面「4. 获取网易云 Cookie」的步骤，在 Network 请求的 **Request Headers → Cookie** 中复制新的完整 Cookie。
 3. 打开自己 Fork 的 **Settings → Secrets and variables → Actions**，在 Repository secrets 中找到 `NETEASE_COOKIE`，点 **Update**（如果没有这个 Secret，则点 **New repository secret**）。名称仍填写 `NETEASE_COOKIE`，值粘贴刚复制的 Cookie 并保存。
-4. 打开 **Actions → Sync NetEase Daily Recommendations → Run workflow**，选 `main` 分支并启动一次正式同步。
+4. 打开 **Actions → Sync NetEase Recommendations → Run workflow**，选 `main` 分支并启动一次正式同步。
 5. 等待运行结束：绿色勾号表示 workflow 成功；再查看日志中的同步结果，确认歌曲已添加到目标 Spotify Playlist。若仍报 301，请重新登录后再复制一次，并确认复制的是完整的 `Cookie` 请求标头，而不是某一个单独 Cookie。
 
 每个使用者都应在自己的 Fork 中保存自己的 Cookie。Cookie 需要在失效时手动更新；重新登录、更新 Secret 后再次运行 workflow 即可恢复。更新 Cookie 本身不会改动代码或 Playlist，只有运行正式同步时才会更新 Playlist。

@@ -122,7 +122,12 @@ def _check_private_file(path: Path) -> None:
     details = path.lstat()
     if path.is_symlink() or not stat.S_ISREG(details.st_mode):
         raise RuntimeError(f"Unsafe environment file: {path}")
-    if details.st_uid != os.getuid() or stat.S_IMODE(details.st_mode) & 0o077:
+    # Ownership and POSIX mode bits are not available through os.getuid() on
+    # Windows. Keep the regular-file and symlink checks there, while enforcing
+    # the stronger owner/mode checks on POSIX systems.
+    if hasattr(os, "getuid") and (
+        details.st_uid != os.getuid() or stat.S_IMODE(details.st_mode) & 0o077
+    ):
         raise RuntimeError(f"Unsafe environment file permissions: {path}")
 
 
@@ -132,7 +137,11 @@ def _ensure_env_directory(path: Path) -> None:
     while parent != parent.parent:
         if parent.is_symlink() or (parent.exists() and not parent.is_dir()):
             raise RuntimeError(f"Unsafe environment directory path: {parent}")
-        if parent.exists() and (parent == home or home in parent.parents):
+        if (
+            hasattr(os, "getuid")
+            and parent.exists()
+            and (parent == home or home in parent.parents)
+        ):
             if parent.lstat().st_uid != os.getuid():
                 raise RuntimeError(f"Unsafe environment directory path: {parent}")
         parent = parent.parent
@@ -140,7 +149,9 @@ def _ensure_env_directory(path: Path) -> None:
         raise RuntimeError(f"Unsafe environment directory: {path}")
     if path.exists():
         details = path.lstat()
-        if details.st_uid != os.getuid() or stat.S_IMODE(details.st_mode) & 0o077:
+        if hasattr(os, "getuid") and (
+            details.st_uid != os.getuid() or stat.S_IMODE(details.st_mode) & 0o077
+        ):
             raise RuntimeError(f"Unsafe environment directory permissions: {path}")
         return
     path.mkdir(parents=True, mode=0o700)
@@ -159,6 +170,7 @@ def save_credentials(
     client_secret: str,
     refresh_token: str,
     playlist_id: str | None = None,
+    radar_playlist_id: str | None = None,
     path: Path = ENV_PATH,
 ) -> None:
     """Update OAuth values while preserving unrelated existing .env lines."""
@@ -173,6 +185,8 @@ def save_credentials(
     }
     if playlist_id is not None:
         updates["SPOTIFY_PLAYLIST_ID"] = playlist_id
+    if radar_playlist_id is not None:
+        updates["SPOTIFY_RADAR_PLAYLIST_ID"] = radar_playlist_id
     seen: set[str] = set()
     output: list[str] = []
     for line in lines:
@@ -210,9 +224,33 @@ def main() -> None:
         (line.split("=", 1)[1].strip() for line in existing_lines if line.startswith("SPOTIFY_PLAYLIST_ID=")),
         "",
     )
+    existing_radar_playlist = next(
+        (
+            line.split("=", 1)[1].strip()
+            for line in existing_lines
+            if line.startswith("SPOTIFY_RADAR_PLAYLIST_ID=")
+        ),
+        "",
+    )
     playlist_id = existing_playlist or playlist_id_from_input(input("Spotify playlist URL or ID: "))
     is_public = input("Is the target playlist public? [y/N]: ").strip().lower() in {"y", "yes"}
-    scope = SPOTIFY_PUBLIC_SCOPE if is_public else SPOTIFY_SCOPE
+    radar_input = input(
+        "Spotify Private Radar target playlist URL or ID (optional; Enter to skip): "
+    ).strip()
+    radar_playlist_id = (
+        playlist_id_from_input(radar_input)
+        if radar_input
+        else existing_radar_playlist or None
+    )
+    radar_is_public = (
+        input("Is the radar target playlist public? [y/N]: ").strip().lower()
+        in {"y", "yes"}
+        if radar_playlist_id
+        else False
+    )
+    if radar_playlist_id == playlist_id:
+        raise ValueError("Use a separate Spotify playlist for Private Radar.")
+    scope = SPOTIFY_PUBLIC_SCOPE if is_public or radar_is_public else SPOTIFY_SCOPE
 
     state = secrets.token_urlsafe(24)
     authorization_url = build_authorization_url(client_id, state, scope)
@@ -232,6 +270,7 @@ def main() -> None:
         client_secret,
         refresh_token,
         playlist_id=None if existing_playlist else playlist_id,
+        radar_playlist_id=radar_playlist_id,
     )
     print(f"Spotify credentials saved securely to {ENV_PATH}.")
 

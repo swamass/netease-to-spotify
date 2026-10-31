@@ -9,6 +9,7 @@ class Settings:
     spotify_refresh_token: str
     spotify_playlist_id: str
     netease_cookie: str
+    spotify_radar_playlist_id: str | None = None
 
 
 REQUIRED_ENV_VARS = (
@@ -31,4 +32,5 @@ def load_settings() -> Settings:
         spotify_refresh_token=os.environ["SPOTIFY_REFRESH_TOKEN"],
         spotify_playlist_id=os.environ["SPOTIFY_PLAYLIST_ID"],
         netease_cookie=os.environ["NETEASE_COOKIE"],
+        spotify_radar_playlist_id=os.getenv("SPOTIFY_RADAR_PLAYLIST_ID") or None,
     )

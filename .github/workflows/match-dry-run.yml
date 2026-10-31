@@ -29,6 +29,7 @@ jobs:
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
           SPOTIFY_PLAYLIST_ID: ${{ secrets.SPOTIFY_PLAYLIST_ID }}
+          SPOTIFY_RADAR_PLAYLIST_ID: ${{ secrets.SPOTIFY_RADAR_PLAYLIST_ID }}
           NETEASE_COOKIE: ${{ secrets.NETEASE_COOKIE }}
         run: python -m src.dry_run | tee match-dry-run.log
 

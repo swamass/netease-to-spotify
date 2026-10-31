@@ -113,7 +113,8 @@ def test_save_credentials_preserves_existing_env_and_writes_atomically(tmp_path,
     assert "SPOTIFY_CLIENT_ID=new-id" in content
     assert "SPOTIFY_CLIENT_SECRET=new-secret" in content
     assert "SPOTIFY_REFRESH_TOKEN=new-refresh" in content
-    assert stat.S_IMODE(env_path.stat().st_mode) == 0o600
+    if hasattr(os, "getuid"):
+        assert stat.S_IMODE(env_path.stat().st_mode) == 0o600
     assert len(replaced) == 1
     assert not list(env_dir.glob(".env.*"))
 
@@ -125,6 +126,11 @@ def test_save_credentials_rejects_env_symlink(tmp_path):
     target.write_text("OTHER=value\n", encoding="utf-8")
     target.chmod(0o600)
     env_path = env_dir / ".env"
-    env_path.symlink_to(target)
+    try:
+        env_path.symlink_to(target)
+    except OSError as error:
+        if os.name == "nt":
+            pytest.skip(f"Creating symlinks is not permitted: {error}")
+        raise
     with pytest.raises(RuntimeError, match="Unsafe environment file"):
         setup.save_credentials("id", "secret", "refresh", path=env_path)
