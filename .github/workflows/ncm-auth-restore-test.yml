@@ -1,0 +1,78 @@
+name: NCM CLI Authentication Restore Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  restore-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install NCM CLI
+        run: npm install --global --no-audit --no-fund @music163/ncm-cli@0.1.7
+
+      - name: Validate complete authentication restore
+        env:
+          NCM_DEVICE_JSON: ${{ secrets.NCM_DEVICE_JSON }}
+          NCM_CREDENTIALS_ENC_JSON: ${{ secrets.NCM_CREDENTIALS_ENC_JSON }}
+          NCM_TOKENS_ENC_JSON: ${{ secrets.NCM_TOKENS_ENC_JSON }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          test -n "$NCM_DEVICE_JSON"
+          test -n "$NCM_CREDENTIALS_ENC_JSON"
+          test -n "$NCM_TOKENS_ENC_JSON"
+          isolated_home="$(mktemp -d)"
+          trap 'rm -rf "$isolated_home"' EXIT
+          ISOLATED_HOME="$isolated_home" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["ISOLATED_HOME"])
+          files = (
+              ("NCM_DEVICE_JSON", root / ".netease_mcp_device.json"),
+              (
+                  "NCM_CREDENTIALS_ENC_JSON",
+                  root / ".config" / "ncm-cli" / "credentials.enc.json",
+              ),
+              (
+                  "NCM_TOKENS_ENC_JSON",
+                  root / ".config" / "ncm-cli" / "tokens.enc.json",
+              ),
+          )
+          for secret_name, path in files:
+              value = os.environ[secret_name]
+              json.loads(value)
+              path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+              path.write_text(value, encoding="utf-8")
+              path.chmod(0o600)
+          PY
+          login_log="$RUNNER_TEMP/ncm-login-check.log"
+          if HOME="$isolated_home" timeout 60s ncm-cli login --check >"$login_log" 2>&1; then
+            echo "login_check=success"
+          else
+            echo "login_check=failed"
+            exit 1
+          fi
+          recommend_log="$RUNNER_TEMP/ncm-recommend-daily.log"
+          if HOME="$isolated_home" timeout 60s ncm-cli recommend daily >"$recommend_log" 2>&1; then
+            count="$(grep -Eo '[0-9]+' "$recommend_log" | tail -1 || true)"
+            if [ -n "$count" ]; then
+              echo "daily_recommendations=success count=$count"
+            else
+              echo "daily_recommendations=success count=unknown"
+            fi
+          else
+            echo "daily_recommendations=failed"
+            exit 1
+          fi
