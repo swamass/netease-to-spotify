@@ -29,5 +29,5 @@ jobs:
           npm --version
           ncm-cli --version
 
-      - name: Verify login help starts successfully
-        run: ncm-cli login --help
+      - name: Verify CLI version
+        run: test "$(ncm-cli --version)" = "0.1.7"
