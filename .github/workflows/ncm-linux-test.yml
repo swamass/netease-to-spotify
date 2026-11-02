@@ -1,0 +1,33 @@
+name: NCM CLI Linux Compatibility Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ncm-linux-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install NCM CLI
+        run: npm install --global --no-audit --no-fund @music163/ncm-cli@0.1.7
+
+      - name: Report Linux, Node.js, npm, and CLI versions
+        run: |
+          uname -a
+          node --version
+          npm --version
+          ncm-cli --version
+
+      - name: Verify login help starts successfully
+        run: ncm-cli login --help
