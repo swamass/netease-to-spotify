@@ -145,6 +145,14 @@ tail -f ~/Library/Logs/netease-to-spotify/sync.log \
 
 ## Cookie 失效后如何恢复
 
+如果需要同时更新 GitHub Actions 的 `NETEASE_COOKIE`，可在 Mac 上运行独立脚本。它会复用本地 Playwright Profile；浏览器中扫码/登录后，先用网易云每日推荐接口验证 Cookie，再通过 `gh secret set` 从 stdin 更新 Secret，不会运行 Spotify 同步：
+
+```bash
+.venv/bin/python scripts/update_netease_cookie_secret.py
+```
+
+使用前请确认 GitHub CLI 已登录，并对仓库有更新 Actions Secret 的权限：`gh auth login`。网易云返回 301、网络异常、Cookie 缺少 `MUSIC_U` 或 `__csrf` 时脚本会停止，且不会修改 Secret。脚本不会把 Cookie 放进命令行参数、日志或临时文件。
+
 如果 Actions 日志出现类似：
 
 ```text

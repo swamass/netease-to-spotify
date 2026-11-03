@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 import scripts.local_sync as local_sync
+import scripts.update_netease_cookie_secret as cookie_secret
 import scripts.local_launchd as local_launchd
 import src.main as production_main
 
@@ -35,6 +36,41 @@ def test_cookie_header_does_not_drop_required_cookie_values():
         ]
     )
     assert cookie == "MUSIC_U=session; __csrf=csrf"
+
+
+def test_cookie_secret_updates_only_after_netease_validation(monkeypatch):
+    calls = []
+    cookie = "MUSIC_U=secret-session; __csrf=secret-csrf"
+    monkeypatch.setattr(local_sync, "_read_browser_cookie", lambda path: cookie)
+    monkeypatch.setattr("src.netease.get_daily_recommendations", lambda value, verbose=False: calls.append(("validate", value)) or [{"name": "song"}])
+    monkeypatch.setattr(cookie_secret.shutil, "which", lambda name: "/usr/local/bin/gh")
+    monkeypatch.setattr(cookie_secret.subprocess, "run", lambda args, **kwargs: calls.append(("gh", args, kwargs)) or SimpleNamespace(returncode=0))
+
+    cookie_secret.update_cookie_secret(Path("profile"))
+
+    assert calls[0] == ("validate", cookie)
+    assert calls[1][0] == "gh"
+    assert calls[1][2]["input"] == cookie.encode()
+    assert cookie not in " ".join(calls[1][1])
+
+
+def test_cookie_secret_does_not_update_on_netease_failure(monkeypatch):
+    calls = []
+    monkeypatch.setattr(local_sync, "_read_browser_cookie", lambda path: "MUSIC_U=s; __csrf=c")
+    monkeypatch.setattr("src.netease.get_daily_recommendations", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("code 301")))
+    monkeypatch.setattr(cookie_secret.subprocess, "run", lambda *args, **kwargs: calls.append(args))
+
+    with pytest.raises(RuntimeError, match="301"):
+        cookie_secret.update_cookie_secret(Path("profile"))
+    assert calls == []
+
+
+def test_cookie_secret_cli_does_not_print_cookie_from_exception(monkeypatch, capsys):
+    cookie = "MUSIC_U=secret-session; __csrf=secret-csrf"
+    monkeypatch.setattr(cookie_secret, "update_cookie_secret", lambda *args: (_ for _ in ()).throw(RuntimeError(cookie)))
+
+    assert cookie_secret.main(["--profile", "profile"]) == 1
+    assert cookie not in capsys.readouterr().err
 
 
 def test_local_env_must_be_private(tmp_path: Path):
