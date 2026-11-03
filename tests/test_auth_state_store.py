@@ -1,4 +1,6 @@
+import os
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 
 from Crypto.Random import get_random_bytes
@@ -179,6 +181,24 @@ def test_remote_validation_rejects_other_hosts() -> None:
     remote_state._validate_remote("https://github.com/swamass/netease-to-spotify")
     with pytest.raises(RuntimeError, match="unexpected GitHub remote"):
         remote_state._validate_remote("https://example.invalid/other/repo.git")
+
+
+def test_repeated_fake_runs_generate_a_new_token_version() -> None:
+    first = remote_state._next_fake_token("a" * 64)
+    second = remote_state._next_fake_token("b" * 64)
+    assert first != second
+    assert first == "updated-aaaaaaaaaaaaaaaa"
+
+
+def test_remote_fake_lifecycle_can_run_twice(tmp_path: Path) -> None:
+    remote = tmp_path / "remote.git"
+    remote.mkdir()
+    subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+    environment = os.environ.copy()
+    key = get_random_bytes(32)
+
+    remote_state.run(tmp_path, str(remote), key, True, environment)
+    remote_state.run(tmp_path, str(remote), key, False, environment)
 
 
 def stat_mode(path: Path) -> int:

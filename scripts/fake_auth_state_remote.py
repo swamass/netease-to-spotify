@@ -18,6 +18,10 @@ STATE_NAME = "auth-state.enc"
 BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 
 
+def _next_fake_token(current_digest: str) -> str:
+    return f"updated-{current_digest[:16]}"
+
+
 def _git(cwd: Path, *args: str, git_env: dict[str, str] | None = None) -> str:
     try:
         result = subprocess.run(
@@ -187,7 +191,8 @@ def run(
         update_digest = state_digest(update_state)
         update_source = root / "updated-source"
         update_source.mkdir()
-        _write_fake_home(update_source, "updated")
+        expected_token = _next_fake_token(update_digest)
+        _write_fake_home(update_source, expected_token)
         if not save_if_changed(update_source, update_state, key, update_digest):
             raise RuntimeError("changed fake state was not written")
         _remove_lock(update_state)
@@ -197,7 +202,7 @@ def run(
         _clone(remote, latest_path, git_env)
         latest_home = root / "restored-latest"
         restore(latest_path / STATE_NAME, latest_home, key)
-        if (latest_home / ".config/ncm-cli/tokens.enc.json").read_text() != '{"token":"updated"}':
+        if (latest_home / ".config/ncm-cli/tokens.enc.json").read_text() != f'{{"token":"{expected_token}"}}':
             raise RuntimeError("latest fake state was not restored")
 
     print("fake_state_remote_test=success")
