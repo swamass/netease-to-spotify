@@ -1,10 +1,12 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from Crypto.Random import get_random_bytes
 
 import pytest
 
 import scripts.auth_state_store as store
+import scripts.fake_auth_state_remote as remote_state
 from scripts.auth_state_store import (
     ConcurrentUpdateError,
     StateCorruptError,
@@ -122,6 +124,30 @@ def test_save_failure_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(store, "_atomic_write", fail_write)
     with pytest.raises(OSError, match="synthetic write failure"):
         save_if_changed(source, tmp_path / "state-branch/auth-state.enc", get_random_bytes(32))
+
+
+def test_remote_branch_lookup_distinguishes_missing_from_transport_failure() -> None:
+    assert remote_state._classify_branch_lookup(0) is True
+    assert remote_state._classify_branch_lookup(2) is False
+    with pytest.raises(RuntimeError, match="unable to inspect fake state branch"):
+        remote_state._classify_branch_lookup(128)
+
+
+def test_remote_branch_probe_passes_git_environment_without_header_argument(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(command: list[str], **kwargs: object) -> SimpleNamespace:
+        captured["command"] = command
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=2)
+
+    git_environment = {"GIT_CONFIG_VALUE_0": "AUTHORIZATION: basic fake"}
+    monkeypatch.setattr(remote_state.subprocess, "run", fake_run)
+    assert remote_state._branch_exists("https://example.invalid/repo.git", git_environment) is False
+    assert captured["env"] is git_environment
+    assert "AUTHORIZATION: basic fake" not in captured["command"]
 
 
 def stat_mode(path: Path) -> int:

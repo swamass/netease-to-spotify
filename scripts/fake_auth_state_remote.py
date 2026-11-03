@@ -33,6 +33,14 @@ def _git(cwd: Path, *args: str, git_env: dict[str, str] | None = None) -> str:
     return result.stdout.strip()
 
 
+def _classify_branch_lookup(returncode: int) -> bool:
+    if returncode == 0:
+        return True
+    if returncode == 2:
+        return False
+    raise RuntimeError("unable to inspect fake state branch")
+
+
 def _branch_exists(remote: str, git_env: dict[str, str]) -> bool:
     result = subprocess.run(
         ["git", "ls-remote", "--exit-code", remote, f"refs/heads/{BRANCH}"],
@@ -42,7 +50,7 @@ def _branch_exists(remote: str, git_env: dict[str, str]) -> bool:
         text=True,
         env=git_env,
     )
-    return result.returncode == 0
+    return _classify_branch_lookup(result.returncode)
 
 
 def _write_fake_home(path: Path, token: str) -> None:
