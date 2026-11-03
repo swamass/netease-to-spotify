@@ -28,7 +28,7 @@ jobs:
       - name: Run matching tests
         env:
           PYTHONPATH: .
-        run: pytest -q tests/test_spotify_matching.py
+        run: pytest -q
 
       - name: Run sync
         env:
