@@ -20,18 +20,54 @@ RSA_MODULUS = (
 )
 
 
+class NetEaseError(RuntimeError):
+    """Base class for safe NetEase retrieval failures."""
+
+
+class NetEaseCookieError(NetEaseError):
+    """The local cookie is missing or incomplete."""
+
+
+class NetEaseAuthenticationError(NetEaseError):
+    """The server explicitly rejected authentication."""
+
+
+class NetEaseNetworkError(NetEaseError):
+    """The HTTP request failed before a usable response was received."""
+
+
+class NetEaseHTTPError(NetEaseError):
+    """The server returned an HTTP error response."""
+
+
+class NetEaseAPIError(NetEaseError):
+    """The API returned an unsuccessful business response."""
+
+
+class NetEaseResponseError(NetEaseError):
+    """The API response was not valid or had an unexpected structure."""
+
+
+class NetEaseEmptyRecommendationsError(NetEaseError):
+    """The API returned no daily recommendations."""
+
+
 def _get_csrf_token(cookie: str) -> str:
-    """从 Cookie 中提取 __csrf。"""
+    """Validate the required session cookies and return ``__csrf``."""
+    values = {}
     for item in cookie.split(";"):
         item = item.strip()
+        if "=" in item:
+            name, value = item.split("=", 1)
+            values[name.strip()] = value.strip()
 
-        if item.startswith("__csrf="):
-            return item.split("=", 1)[1]
-
-    raise RuntimeError(
-        "NETEASE_COOKIE does not contain __csrf. "
-        "Please update the NetEase cookie in GitHub Secrets."
-    )
+    missing = [name for name in ("MUSIC_U", "__csrf") if not values.get(name)]
+    if missing:
+        raise NetEaseCookieError(
+            "NETEASE_COOKIE is missing required non-empty cookie values: "
+            + ", ".join(missing)
+        )
+    return values["__csrf"]
 
 
 def _random_key(length: int = 16) -> str:
@@ -162,35 +198,48 @@ def get_daily_recommendations(cookie: str, *, verbose: bool = True) -> list[dict
         "Content-Type": "application/x-www-form-urlencoded",
     }
 
-    response = requests.post(
-        WEAPI_URL,
-        params={"csrf_token": csrf_token},
-        data=encrypted,
-        headers=headers,
-        timeout=30,
-    )
+    try:
+        response = requests.post(
+            WEAPI_URL,
+            params={"csrf_token": csrf_token},
+            data=encrypted,
+            headers=headers,
+            timeout=30,
+        )
+    except requests.exceptions.RequestException as exc:
+        raise NetEaseNetworkError("NetEase request failed before a response was received.") from exc
 
-    response.raise_for_status()
+    if response.status_code in (401, 403):
+        raise NetEaseAuthenticationError(
+            f"NetEase authentication was rejected (HTTP {response.status_code})."
+        )
+    if response.status_code < 200 or response.status_code >= 300:
+        raise NetEaseHTTPError(f"NetEase returned HTTP status {response.status_code}.")
 
     try:
         data = response.json()
     except ValueError as exc:
-        raise RuntimeError(
-            f"NetEase returned non-JSON response: {response.text[:500]}"
-        ) from exc
+        raise NetEaseResponseError("NetEase returned a non-JSON response.") from exc
+
+    if not isinstance(data, dict):
+        raise NetEaseResponseError("NetEase returned an unexpected response structure.")
 
     if data.get("code") != 200:
-        raise RuntimeError(
-            f"NetEase API returned code {data.get('code')}: "
-            f"{data.get('message', data.get('msg', 'unknown error'))}"
+        raise NetEaseAPIError(
+            f"NetEase API returned an unsuccessful business code: {data.get('code')!r}."
         )
 
-    songs = data.get("data", {}).get("dailySongs", [])
+    response_data = data.get("data")
+    if not isinstance(response_data, dict):
+        raise NetEaseResponseError("NetEase returned an unexpected data structure.")
+
+    songs = response_data.get("dailySongs")
+    if not isinstance(songs, list):
+        raise NetEaseResponseError("NetEase returned an unexpected dailySongs structure.")
 
     if not songs:
-        raise RuntimeError(
-            "NetEase returned 0 daily recommendations. "
-            "The cookie may be expired or invalid."
+        raise NetEaseEmptyRecommendationsError(
+            "NetEase returned 0 daily recommendations."
         )
 
     if verbose:
