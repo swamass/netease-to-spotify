@@ -1,0 +1,48 @@
+name: NCM Encrypted State Remote Fake Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      initialize:
+        description: "Initialize the dedicated fake state branch (first run only)"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ncm-auth-state-fake-branch
+  cancel-in-progress: false
+
+jobs:
+  fake-state:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Run remote fake-state lifecycle
+        env:
+          NCM_AUTH_FAKE_STATE_KEY: ${{ secrets.NCM_AUTH_FAKE_STATE_KEY }}
+          PYTHONPATH: .
+        run: |
+          set -Eeuo pipefail
+          test -n "$NCM_AUTH_FAKE_STATE_KEY"
+          args=(--repo "$GITHUB_WORKSPACE")
+          if [ "${{ inputs.initialize }}" = "true" ]; then
+            args+=(--initialize)
+          fi
+          python -m scripts.fake_auth_state_remote "${args[@]}"
