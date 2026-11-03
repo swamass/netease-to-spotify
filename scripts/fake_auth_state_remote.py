@@ -8,6 +8,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 from scripts.auth_state_store import restore, save_if_changed, state_digest
 
@@ -33,24 +34,59 @@ def _git(cwd: Path, *args: str, git_env: dict[str, str] | None = None) -> str:
     return result.stdout.strip()
 
 
-def _classify_branch_lookup(returncode: int) -> bool:
+def _classify_branch_lookup(returncode: int, stderr: str = "") -> bool:
     if returncode == 0:
         return True
     if returncode == 2:
         return False
-    raise RuntimeError("unable to inspect fake state branch")
+    message = stderr.lower()
+    if any(marker in message for marker in ("authentication", "401", "403", "forbidden", "permission")):
+        category = "authentication_or_permission"
+    elif any(marker in message for marker in ("resolve", "connect", "network", "proxy", "timed out")):
+        category = "network_or_proxy"
+    else:
+        category = "git_command_error"
+    raise RuntimeError(f"unable to inspect fake state branch: {category}")
 
 
-def _branch_exists(remote: str, git_env: dict[str, str]) -> bool:
+def _branch_exists(remote: str, git_env: dict[str, str], cwd: Path) -> bool:
     result = subprocess.run(
         ["git", "ls-remote", "--exit-code", remote, f"refs/heads/{BRANCH}"],
+        cwd=cwd,
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         env=git_env,
     )
-    return _classify_branch_lookup(result.returncode)
+    return _classify_branch_lookup(result.returncode, result.stderr)
+
+
+def _validate_remote(remote: str) -> None:
+    parsed = urlparse(remote)
+    normalized_path = parsed.path.rstrip("/")
+    if normalized_path.endswith(".git"):
+        normalized_path = normalized_path[:-4]
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "github.com"
+        or normalized_path != "/swamass/netease-to-spotify"
+    ):
+        raise RuntimeError("unexpected GitHub remote")
+
+
+def _build_git_env(base_env: dict[str, str], header: str) -> dict[str, str]:
+    git_env = dict(base_env)
+    if header:
+        git_env.update(
+            {
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "http.https://github.com/.extraHeader",
+                "GIT_CONFIG_VALUE_0": header,
+            }
+        )
+    git_env["GIT_TERMINAL_PROMPT"] = "0"
+    return git_env
 
 
 def _write_fake_home(path: Path, token: str) -> None:
@@ -105,14 +141,13 @@ def run(
         raise ValueError("NCM_AUTH_FAKE_STATE_KEY must decode to 32 bytes")
     if not BRANCH_RE.fullmatch(BRANCH):
         raise ValueError("invalid state branch")
-    exists = _branch_exists(remote, git_env)
-    if not exists and not initialize:
-        raise RuntimeError("state branch is missing; explicit initialization required")
-    if exists and initialize:
-        raise RuntimeError("state branch already exists; refusing reinitialization")
-
     with tempfile.TemporaryDirectory(prefix="ncm-auth-state-") as temporary:
         root = Path(temporary)
+        exists = _branch_exists(remote, git_env, root)
+        if not exists and not initialize:
+            raise RuntimeError("state branch is missing; explicit initialization required")
+        if exists and initialize:
+            raise RuntimeError("state branch already exists; refusing reinitialization")
         branch_path = root / "branch"
         if exists:
             _clone(remote, branch_path, git_env)
@@ -173,7 +208,7 @@ def main() -> None:
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--initialize", action="store_true")
     args = parser.parse_args()
-    git_env = os.environ.copy()
+    base_env = os.environ.copy()
     header_result = subprocess.run(
         ["git", "config", "--local", "--get", "http.https://github.com/.extraheader"],
         cwd=args.repo,
@@ -181,19 +216,12 @@ def main() -> None:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        env=git_env,
+        env=base_env,
     )
     header = header_result.stdout.strip() if header_result.returncode == 0 else ""
-    if header:
-        git_env.update(
-            {
-                "GIT_CONFIG_COUNT": "1",
-                "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
-                "GIT_CONFIG_VALUE_0": header,
-            }
-        )
-    git_env["GIT_TERMINAL_PROMPT"] = "0"
+    git_env = _build_git_env(base_env, header)
     remote = _git(args.repo, "config", "--get", "remote.origin.url", git_env=git_env)
+    _validate_remote(remote)
     encoded_key = os.environ.get("NCM_AUTH_FAKE_STATE_KEY", "")
     key = base64.b64decode(encoded_key, validate=True)
     run(args.repo, remote, key, args.initialize, git_env)

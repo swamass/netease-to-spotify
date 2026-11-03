@@ -129,7 +129,22 @@ def test_save_failure_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 def test_remote_branch_lookup_distinguishes_missing_from_transport_failure() -> None:
     assert remote_state._classify_branch_lookup(0) is True
     assert remote_state._classify_branch_lookup(2) is False
-    with pytest.raises(RuntimeError, match="unable to inspect fake state branch"):
+    with pytest.raises(RuntimeError, match="authentication_or_permission"):
+        remote_state._classify_branch_lookup(128, "fatal: authentication failed")
+    with pytest.raises(RuntimeError, match="network_or_proxy"):
+        remote_state._classify_branch_lookup(128, "fatal: could not connect")
+
+
+def test_git_environment_does_not_log_header() -> None:
+    header = "AUTHORIZATION: basic fake-header"
+    git_environment = remote_state._build_git_env({"PATH": "/bin"}, header)
+    assert git_environment["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraHeader"
+    assert git_environment["GIT_CONFIG_VALUE_0"] == header
+    assert "fake-header" not in " ".join(["git", "ls-remote"])
+
+
+def test_unknown_branch_probe_failure_is_not_reported_as_missing() -> None:
+    with pytest.raises(RuntimeError, match="git_command_error"):
         remote_state._classify_branch_lookup(128)
 
 
@@ -141,13 +156,29 @@ def test_remote_branch_probe_passes_git_environment_without_header_argument(
     def fake_run(command: list[str], **kwargs: object) -> SimpleNamespace:
         captured["command"] = command
         captured.update(kwargs)
-        return SimpleNamespace(returncode=2)
+        return SimpleNamespace(returncode=2, stderr="")
 
     git_environment = {"GIT_CONFIG_VALUE_0": "AUTHORIZATION: basic fake"}
     monkeypatch.setattr(remote_state.subprocess, "run", fake_run)
-    assert remote_state._branch_exists("https://example.invalid/repo.git", git_environment) is False
+    probe_dir = Path("/tmp/fake-state-probe")
+    assert remote_state._branch_exists("https://example.invalid/repo.git", git_environment, probe_dir) is False
     assert captured["env"] is git_environment
+    assert captured["cwd"] is probe_dir
     assert "AUTHORIZATION: basic fake" not in captured["command"]
+
+
+def test_git_header_is_github_domain_scoped() -> None:
+    header = "AUTHORIZATION: basic fake-header"
+    git_environment = remote_state._build_git_env({"PATH": "/bin"}, header)
+    assert git_environment["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraHeader"
+    assert git_environment["GIT_CONFIG_VALUE_0"] == header
+
+
+def test_remote_validation_rejects_other_hosts() -> None:
+    remote_state._validate_remote("https://github.com/swamass/netease-to-spotify.git")
+    remote_state._validate_remote("https://github.com/swamass/netease-to-spotify")
+    with pytest.raises(RuntimeError, match="unexpected GitHub remote"):
+        remote_state._validate_remote("https://example.invalid/other/repo.git")
 
 
 def stat_mode(path: Path) -> int:
