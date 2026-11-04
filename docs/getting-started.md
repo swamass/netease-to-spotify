@@ -10,7 +10,7 @@
 - 一个 Spotify 账号和一个准备接收歌曲的 Playlist。
 - 建议新建一个专门接收每日推荐的 Spotify Playlist，避免覆盖其他歌单。
 - 一个网易云音乐账号，并能在网页中登录或用 App 扫码。
-- Git 和 Python 3.12。macOS 本地同步还需要 Chromium 和 GitHub CLI；只使用 GitHub Actions 时仍需要 Python 来运行授权工具。
+- Git 和 Python 3.12。macOS 本地同步需要 Chromium，但不需要 GitHub CLI；只有通过 Mac 自动更新 GitHub Actions 的网易云 Cookie 时，才需要 GitHub CLI。
 
 “Fork”是把别人的 GitHub 项目复制到你自己的账号下；“Secret”是 GitHub 提供的加密配置项，程序可以读取但日志不会显示其值。
 
