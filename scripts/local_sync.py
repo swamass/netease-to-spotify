@@ -212,7 +212,7 @@ def _scheduled_guard(
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
-def _read_browser_cookie(profile_dir: Path) -> str:
+def _read_browser_cookie(profile_dir: Path, *, clear_login: bool = False) -> str:
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
@@ -224,6 +224,9 @@ def _read_browser_cookie(profile_dir: Path) -> str:
     with sync_playwright() as playwright:
         context = playwright.chromium.launch_persistent_context(str(profile_dir), headless=False)
         try:
+            if clear_login:
+                context.clear_cookies(name="MUSIC_U")
+                context.clear_cookies(name="__csrf")
             page = context.pages[0] if context.pages else context.new_page()
             page.goto(NETEASE_URL, wait_until="domcontentloaded", timeout=30_000)
             deadline = time.monotonic() + 300

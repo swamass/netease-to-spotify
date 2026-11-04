@@ -35,10 +35,14 @@ def _set_github_secret(cookie: str, repository: str = GITHUB_REPO) -> None:
 def update_cookie_secret(profile_dir: Path, repository: str = GITHUB_REPO) -> None:
     _ensure_repo_import_path()
     from scripts.local_sync import _read_browser_cookie
-    from src.netease import get_daily_recommendations
+    from src.netease import NetEaseAuthenticationError, get_daily_recommendations
 
     cookie = _read_browser_cookie(profile_dir)
-    get_daily_recommendations(cookie, verbose=False)
+    try:
+        get_daily_recommendations(cookie, verbose=False)
+    except NetEaseAuthenticationError:
+        cookie = _read_browser_cookie(profile_dir, clear_login=True)
+        get_daily_recommendations(cookie, verbose=False)
     _set_github_secret(cookie, repository)
 
 

@@ -14,6 +14,7 @@ import scripts.local_sync as local_sync
 import scripts.update_netease_cookie_secret as cookie_secret
 import scripts.local_launchd as local_launchd
 import src.main as production_main
+import src.netease as netease
 
 
 def test_cookie_header_requires_logged_in_session():
@@ -52,6 +53,96 @@ def test_cookie_secret_updates_only_after_netease_validation(monkeypatch):
     assert calls[1][0] == "gh"
     assert calls[1][2]["input"] == cookie.encode()
     assert cookie not in " ".join(calls[1][1])
+
+
+def test_cookie_secret_reauthenticates_once_after_expired_cookie(monkeypatch):
+    calls = []
+    cookies = iter([
+        "MUSIC_U=expired; __csrf=expired-csrf",
+        "MUSIC_U=fresh; __csrf=fresh-csrf",
+    ])
+
+    def read_cookie(path, *, clear_login=False):
+        calls.append(("read", clear_login))
+        return next(cookies)
+
+    def validate(cookie, verbose=False):
+        calls.append(("validate", cookie))
+        if cookie.startswith("MUSIC_U=expired"):
+            raise netease.NetEaseAuthenticationError("expired")
+        return [{"name": "song"}]
+
+    monkeypatch.setattr(local_sync, "_read_browser_cookie", read_cookie)
+    monkeypatch.setattr("src.netease.get_daily_recommendations", validate)
+    monkeypatch.setattr(cookie_secret.shutil, "which", lambda name: "/usr/local/bin/gh")
+    monkeypatch.setattr(
+        cookie_secret.subprocess,
+        "run",
+        lambda args, **kwargs: calls.append(("gh", args, kwargs))
+        or SimpleNamespace(returncode=0),
+    )
+
+    cookie_secret.update_cookie_secret(Path("profile"))
+
+    assert calls[0:4] == [
+        ("read", False),
+        ("validate", "MUSIC_U=expired; __csrf=expired-csrf"),
+        ("read", True),
+        ("validate", "MUSIC_U=fresh; __csrf=fresh-csrf"),
+    ]
+    assert calls[4][0] == "gh"
+    assert calls[4][2]["input"] == b"MUSIC_U=fresh; __csrf=fresh-csrf"
+
+
+def test_cookie_secret_reauth_failure_does_not_update(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        local_sync,
+        "_read_browser_cookie",
+        lambda path, *, clear_login=False: calls.append(("read", clear_login))
+        or (
+            "MUSIC_U=expired; __csrf=expired-csrf"
+            if not clear_login
+            else "MUSIC_U=still-invalid; __csrf=still-invalid"
+        ),
+    )
+    monkeypatch.setattr(
+        "src.netease.get_daily_recommendations",
+        lambda cookie, verbose=False: (_ for _ in ()).throw(
+            netease.NetEaseAuthenticationError("invalid")
+        ),
+    )
+    monkeypatch.setattr(cookie_secret.subprocess, "run", lambda *args, **kwargs: calls.append(("gh", args)))
+
+    with pytest.raises(netease.NetEaseAuthenticationError):
+        cookie_secret.update_cookie_secret(Path("profile"))
+    assert [call[0] for call in calls] == ["read", "read"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        netease.NetEaseNetworkError("network"),
+        netease.NetEaseAPIError("api"),
+    ],
+)
+def test_cookie_secret_non_auth_failure_does_not_reauthenticate(monkeypatch, error):
+    calls = []
+    monkeypatch.setattr(
+        local_sync,
+        "_read_browser_cookie",
+        lambda path, **kwargs: calls.append(("read", kwargs))
+        or "MUSIC_U=session; __csrf=csrf",
+    )
+    monkeypatch.setattr(
+        "src.netease.get_daily_recommendations",
+        lambda cookie, verbose=False: (_ for _ in ()).throw(error),
+    )
+    monkeypatch.setattr(cookie_secret.subprocess, "run", lambda *args, **kwargs: calls.append(("gh", args)))
+
+    with pytest.raises(type(error)):
+        cookie_secret.update_cookie_secret(Path("profile"))
+    assert calls == [("read", {})]
 
 
 def test_cookie_secret_does_not_update_on_netease_failure(monkeypatch):

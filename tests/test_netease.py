@@ -109,7 +109,7 @@ def test_network_failure_is_classified(monkeypatch):
     ("http_status", "business_code", "expected"),
     [
         (500, 200, netease.NetEaseHTTPError),
-        (200, 301, netease.NetEaseAPIError),
+        (200, 500, netease.NetEaseAPIError),
     ],
 )
 def test_http_and_business_failures_are_distinct(
@@ -127,6 +127,22 @@ def test_http_and_business_failures_are_distinct(
     monkeypatch.setattr(netease.requests, "post", lambda *args, **kwargs: Response())
 
     with pytest.raises(expected):
+        netease.get_daily_recommendations(
+            "MUSIC_U=session; __csrf=csrf-token",
+            verbose=False,
+        )
+
+
+def test_business_code_301_is_authentication_failure(monkeypatch):
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return {"code": 301}
+
+    monkeypatch.setattr(netease.requests, "post", lambda *args, **kwargs: Response())
+
+    with pytest.raises(netease.NetEaseAuthenticationError):
         netease.get_daily_recommendations(
             "MUSIC_U=session; __csrf=csrf-token",
             verbose=False,

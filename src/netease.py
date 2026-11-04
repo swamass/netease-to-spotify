@@ -224,6 +224,10 @@ def get_daily_recommendations(cookie: str, *, verbose: bool = True) -> list[dict
     if not isinstance(data, dict):
         raise NetEaseResponseError("NetEase returned an unexpected response structure.")
 
+    if data.get("code") == 301:
+        raise NetEaseAuthenticationError(
+            "NetEase authentication was rejected by the API."
+        )
     if data.get("code") != 200:
         raise NetEaseAPIError(
             f"NetEase API returned an unsuccessful business code: {data.get('code')!r}."
